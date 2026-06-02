@@ -1,0 +1,106 @@
+# WebSocket 实时推送产线配置
+# 出价事件 → Redis Stream → 消费者 → WebSocket Hub → 房间广播 → 前端渲染
+
+pipeline: websocket-push
+domain: "用户出价后通过 WebSocket 实时推送到所有在线客户端"
+
+version: "1.0"
+
+dependencies:
+  - "bid-closed-loop"  # 依赖出价闭环先完成
+
+input:
+  - "出价成功后的 BidResult 数据结构"
+  - "Redis Stream key 设计：auction:events"
+  - "WebSocket 协议文档（docs/implementation-plan.md #9）"
+  - "LiveRoom model（按 roomId 隔离房间）"
+  - "前端现有项目结构（web-h5 + web-admin）"
+
+verification_gates:
+  - id: compile
+    type: "shell"
+    command: "go build ./..."
+    description: "后端编译验证"
+    auto_fix: true
+
+  - id: backend-tests
+    type: "shell"
+    command: "go test ./... -count=1"
+    description: "后端全量测试"
+    auto_fix: false
+
+  - id: h5-build
+    type: "shell"
+    command: "cd web-h5 && npm run build 2>&1"
+    description: "H5 前端构建验证"
+    auto_fix: false
+
+  - id: admin-build
+    type: "shell"
+    command: "cd web-admin && npm run build 2>&1"
+    description: "管理后台前端构建验证"
+    auto_fix: false
+
+  - id: integration-tests
+    type: "shell"
+    command: "go test -tags=integration -count=1 ./... 2>&1"
+    description: "集成测试（需 Docker 中 MySQL + Redis 运行）"
+    auto_fix: false
+    optional: true  # Docker 未启动时跳过
+
+workflow:
+  # === 后端 ===
+  - step: "添加 gorilla/websocket 依赖到 go.mod"
+    check: "compile"
+
+  - step: "新建 internal/websocket/hub.go — WebSocket Hub（房间管理 + 注册/注销/广播）"
+    check: "compile"
+
+  - step: "新建 internal/websocket/client.go — WebSocket Client（连接、读、写、房间绑定）"
+    check: "compile"
+
+  - step: "新建 internal/stream/consumer.go — Redis Stream 消费者（消费 auction:events，按 roomId 广播到 Hub）"
+    check: "compile"
+
+  - step: "修改 internal/service/public.go — PlaceBid 成功后在 persistAcceptedBid 中写入 Redis Stream（XADD）"
+    check: "compile"
+
+  - step: "修改 internal/handler/public.go — 新增 WebSocket 升级端点 GET /api/rooms/:roomId/ws"
+    check: "compile"
+
+  - step: "修改 main.go — 启动时初始化 WebSocket Hub + Stream 消费者协程"
+    check: "compile"
+
+  - step: "后端全量测试"
+    check: "backend-tests"
+
+  # === H5 前端 ===
+  - step: "新建 web-h5/src/hooks/useWebSocket.ts — WebSocket hook（连接、重连、心跳、消息分发）"
+    check: "h5-build"
+
+  # === WebAdmin 前端 ===
+  - step: "新建 web-admin/src/hooks/useWebSocket.ts — 同上，WebSocket hook"
+    check: "admin-build"
+
+  - step: "全量回归验证"
+    check: "backend-tests"
+
+output:
+  - "server/go.mod"
+  - "server/go.sum"
+  - "server/internal/websocket/hub.go"      # [NEW]
+  - "server/internal/websocket/client.go"    # [NEW]
+  - "server/internal/stream/consumer.go"     # [NEW]
+  - "server/internal/service/public.go"      # MODIFY
+  - "server/internal/handler/public.go"      # MODIFY
+  - "server/main.go"                         # MODIFY
+  - "web-h5/src/hooks/useWebSocket.ts"       # [NEW]
+  - "web-admin/src/hooks/useWebSocket.ts"    # [NEW]
+
+min_pass_rate: 0.85
+
+metadata:
+  author: "AI Dev Pipeline"
+  created: "2026-06-02"
+  rules_dependency: "docs/rules/auction-rules.yaml"
+  deviation_log: "docs/rules/deviations-log.md"

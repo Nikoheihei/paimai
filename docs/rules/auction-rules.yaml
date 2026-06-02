@@ -1,0 +1,75 @@
+# 竞拍业务规则库
+# 作为 AI 产线的确定性裁判依据
+# 每次 AI 犯错后，这里追加一条规则
+
+rules:
+
+  - id: bid-amount-valid
+    scenario: "用户出价金额校验"
+    description: "出价金额必须大于当前价，且超出部分必须是加价步长的整数倍"
+    condition: "amountCents > currentPriceCents AND (amountCents - currentPriceCents) % bidIncrementCents == 0"
+    action: "接受出价，更新当前价为 amountCents"
+    exception: "若 amountCents >= capPriceCents（封顶价>0），直接成交，不再校验加价步长"
+
+  - id: bid-cap-price
+    scenario: "封顶价自动成交"
+    description: "出价达到或超过封顶价时立即截标，状态变为 sold"
+    condition: "capPriceCents > 0 AND amountCents >= capPriceCents"
+    action: "设置 currentPriceCents = capPriceCents，状态 = sold，WinnerUserID = 出价用户"
+    exception: "无封顶价（capPriceCents = 0）时不触发此规则"
+
+  - id: bid-idempotency
+    scenario: "重复出价防护"
+    description: "同一幂等键在本次竞拍中已存在时，返回已有结果，不重复执行"
+    condition: "idempotencyKey 在 auctions.id + bids.idempotencyKey 唯一索引中已存在"
+    action: "返回该幂等键对应的历史出价结果"
+    exception: "当历史出价记录状态为 rejected 时，可以重新处理"
+
+  - id: extension-timeout
+    scenario: "延时模式自动延长"
+    description: "距 endAt 不足 extendThresholdSec 时触发延时"
+    condition: "mode == 'extension' AND endAt - now < extendThresholdSec AND endAt + extendDurationSec <= startAt + 2 * (endAt - startAt)"
+    action: "endAt += extendDurationSec"
+    exception: "已达最大延长时间（原始时长 2 倍）或已达封顶价时不再延长"
+
+  - id: sudden-death-no-extension
+    scenario: "绝杀模式不延时"
+    description: "sudden_death 模式下即使结束前有人出价，也不延长倒计时"
+    condition: "mode == 'sudden_death'"
+    action: "正常处理出价，不修改 endAt"
+    exception: "无"
+
+  - id: auction-status-transition
+    scenario: "状态机流转"
+    description: "竞拍状态变更必须走状态机，不允许直接修改 status 字段"
+    condition: "当前状态 + 操作必须在预定义的合法对中"
+    action: "拒绝非法流转并返回错误"
+    exception: "cancel 可在 running 和 scheduled 状态下执行；状态机定义见 internal/statemachine/auction.go"
+
+  - id: reserve-price-check
+    scenario: "保留价拍卖"
+    description: "保留价模式下，截标时当前价未达保留价则流拍（failed）"
+    condition: "mode == 'reserve' AND ReservePriceCents != NULL AND currentPriceCents < ReservePriceCents"
+    action: "状态 = failed，不生成订单，释放保证金"
+    exception: "保留价为 NULL 时视为无保留价，不触发此规则"
+
+  - id: bid-timestamp-order
+    scenario: "出价时间序"
+    description: "严格按服务端时间 serverTs 作为出价先后顺序，clientTs 仅用于客户端展示"
+    condition: "新出价的 serverTs 必须 >= 当前最高出价的 serverTs"
+    action: "接受符合时间序的出价"
+    exception: "当 serverTs 相同且 amountCents 也相同时，先到达服务的请求优先"
+
+  - id: minimum-bid-interval
+    scenario: "出价频率限制"
+    description: "同一用户在同一个竞拍中，两次出价间隔至少 1 秒"
+    condition: "serverTs - 用户上一次出价的 serverTs >= 1000"
+    action: "接受出价"
+    exception: "不适用于达到封顶价之前的最后一次出价"
+
+  - id: unit-consistency
+    scenario: "金额单位"
+    description: "所有金额在服务端统一使用分（cents, int64），前端展示时除以 100 转换为元"
+    condition: "所有金额相关的字段、参数、返回值均为 int64 类型，单位分"
+    action: "保持单位统一"
+    exception: "API 响应的 JSON 字段保持 int64，前端自行处理展示格式"

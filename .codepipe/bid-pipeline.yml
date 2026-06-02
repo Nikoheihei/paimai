@@ -1,0 +1,100 @@
+# 出价闭环产线配置
+# AI 中心化开发：定义输入、验证关卡、工作流，AI 全自动跑通
+
+pipeline: bid-closed-loop
+domain: "用户出价 → 原子校验 → 持久化 → 广播事件"
+
+version: "1.0"
+
+input:
+  - "POST /api/auctions/:id/bids 请求参数规范：userId, amountCents, idempotencyKey, clientTs"
+  - "状态机合法流转图（docs/rules/auction-rules.yaml）"
+  - "竞拍模式规则（sudden_death / extension / reserve）"
+  - "现有 handler/service/repository 三层模式参考"
+
+verification_gates:
+  - id: compile
+    type: "shell"
+    command: "go build ./..."
+    description: "编译级验证"
+    auto_fix: true
+
+  - id: unit-tests
+    type: "shell"
+    command: "go test ./internal/service/... -run TestBid -v"
+    description: "已有出价相关测试回归"
+    auto_fix: true
+
+  - id: bid-amount-rule
+    type: "test-assertion"
+    rule_ref: "auction-rules.yaml#bid-amount-valid"
+    description: "出价金额必须 > 当前价 + 加价步长"
+    auto_fix: true
+
+  - id: idempotency-rule
+    type: "test-assertion"
+    rule_ref: "auction-rules.yaml#bid-idempotency"
+    description: "幂等键不能重复使用"
+    auto_fix: true
+
+  - id: cap-price-rule
+    type: "test-assertion"
+    rule_ref: "auction-rules.yaml#bid-cap-price"
+    description: "封顶价到达后立即成交，状态为 sold"
+    auto_fix: true
+
+  - id: extension-rule
+    type: "test-assertion"
+    rule_ref: "auction-rules.yaml#extension-timeout"
+    description: "延时规则：结束前出价应延长"
+    auto_fix: true
+
+  - id: frequency-rule
+    type: "test-assertion"
+    rule_ref: "auction-rules.yaml#minimum-bid-interval"
+    description: "同一用户两次出价间隔 >= 1 秒"
+    auto_fix: true
+
+  - id: all-tests
+    type: "shell"
+    command: "go test ./... -count=1"
+    description: "全量回归测试"
+    auto_fix: false  # 全量回归失败需人工判断
+
+workflow:
+  - step: "读取 input 中引用的所有契约和模式示例"
+    action: "load_context"
+
+  - step: "生成或修改 internal/handler/public.go 中的出价 handler"
+    check: "compile"
+    iterate: 3
+
+  - step: "生成或修改 internal/service/public.go 中的出价 service"
+    check: "compile"
+    iterate: 3
+
+  - step: "生成或修改 internal/repository/public.go 中的出价 repository"
+    check: "compile"
+    iterate: 3
+
+  - step: "生成或更新 internal/service/public_test.go 中的测试"
+    check: "unit-tests"
+    iterate: 3
+
+  - step: "运行全量回归测试"
+    check: "all-tests"
+    iterate: 2
+
+output:
+  - "internal/handler/public.go"
+  - "internal/service/public.go"
+  - "internal/repository/public.go"
+  - "internal/service/public_test.go"
+
+min_pass_rate: 0.90
+
+metadata:
+  author: "AI Dev Pipeline"
+  created: "2026-06-02"
+  rules_dependency: "docs/rules/auction-rules.yaml"
+  deviation_log: "docs/rules/deviations-log.md"

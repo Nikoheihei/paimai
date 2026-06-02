@@ -1,0 +1,45 @@
+# H5 竞拍直播间产线配置
+# 从脚手架页面改造成可出价的竞拍直播间
+
+pipeline: h5-bidding-ui
+domain: "H5 移动端竞拍直播间 — 实时出价交互"
+
+version: "1.0"
+
+dependencies:
+  - "bid-closed-loop"   # 出价 API
+  - "websocket-push"    # 实时推送
+
+input:
+  - "H5 现有 index.html（标题已改为「直播间 — 实时竞拍」）"
+  - "api/client.ts（REST 接口封装，含 getAuction / getRanking / placeBid）"
+  - "hooks/useWebSocket.ts"
+  - "pages/RoomPage.tsx（已有骨架）"
+  - "components/AuctionPanel.tsx（已有骨架）"
+
+verification_gates:
+  - id: build
+    type: "shell"
+    command: "npm run build"
+    description: "H5 前端构建"
+    auto_fix: false
+
+workflow:
+  - step: "检查现有组件结构"
+  - step: "补 placeBid API"
+  - step: "改造 AuctionPanel：倒计时、出价输入、快捷出价"
+  - step: "改造 AuctionPanel：排行榜、我的排名、被超越提醒"
+  - step: "App.tsx：query 参数路由已就绪"
+  - step: "构建验证"
+
+output:
+  - "web-h5/src/api/client.ts"             # MODIFY（+placeBid）
+  - "web-h5/src/components/AuctionPanel.tsx"  # MODIFY（完整竞拍交互）
+  - "web-h5/src/App.css"                     # MODIFY（追加样式）
+  - "web-h5/src/pages/RoomPage.tsx"          # MODIFY（补 userId 传参）
+
+min_pass_rate: 1.0
+
+metadata:
+  author: "AI Dev Pipeline"
+  created: "2026-06-02"

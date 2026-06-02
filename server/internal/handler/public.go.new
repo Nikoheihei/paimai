@@ -1,0 +1,41 @@
+package handler
+
+import (
+	"log"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	gorillaWs "github.com/gorilla/websocket"
+
+	"paimai/internal/service"
+	ws "paimai/internal/websocket"
+	"paimai/pkg/response"
+)
+
+// upgrader 是 WebSocket 升级器，负责将 HTTP 连接升级为 WebSocket 连接。
+var upgrader = gorillaWs.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	// 允许所有来源的 WebSocket 连接，开发阶段不限制 origin。
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// PublicHandler 负责用户端直播间、竞拍详情、排行榜和出价 API 的 HTTP 适配。
+type PublicHandler struct {
+	service *service.PublicService
+	hub     *ws.Hub
+}
+
+// RegisterPublicRoutes 注册用户端 REST API 路由。
+func RegisterPublicRoutes(r *gin.Engine, publicService *service.PublicService, hub *ws.Hub) {
+	h := &PublicHandler{service: publicService, hub: hub}
+	api := r.Group("/api")
+	{
+		api.GET("/rooms/:roomId", h.getRoom)
+		api.GET("/rooms/:roomId/auctions", h.listRoomAuctions)
+		api.GET("/auctions/:id", h.getAuction)
+		api.GET("/auctions/:id/ranking", h.getRanking)
+		api.POST("/auctions/:id/bids", h.placeBid)
+		api.GET("/rooms/:roomId/ws", h.serveWS)
+	}

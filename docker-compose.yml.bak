@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: paimai-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: paimai
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+
+  redis-master:
+    image: redis:7-alpine
+    container_name: paimai-redis-master
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_master_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+
+  redis-slave:
+    image: redis:7-alpine
+    container_name: paimai-redis-slave
+    restart: always
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_slave_data:/data
+    command: redis-server --replicaof redis-master 6379 --appendonly yes --appendfsync everysec
+    depends_on:
+      - redis-master
+
+volumes:
+  mysql_data:
+  redis_master_data:
+  redis_slave_data:

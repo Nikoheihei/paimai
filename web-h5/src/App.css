@@ -1,0 +1,363 @@
+/* H5 竞拍直播间样式 */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e0;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 12px;
+}
+
+/* 页面头部 */
+.room-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.room-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.reconnect-btn {
+  background: #2a2a3e;
+  border: none;
+  color: #aaa;
+  font-size: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.reconnect-btn:hover {
+  background: #3a3a5e;
+}
+
+/* 连接指示器 */
+.connection-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 12px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.green {
+  background: #4caf50;
+  box-shadow: 0 0 6px #4caf50;
+}
+
+.dot.red {
+  background: #f44336;
+  box-shadow: 0 0 6px #f44336;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.4; }
+}
+
+/* 竞拍面板 */
+.panel {
+  background: #1a1a2e;
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.panel.pending {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.product-name {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.mode-tag {
+  font-size: 12px;
+  color: #ff9800;
+  margin-bottom: 16px;
+}
+
+/* 价格区域 */
+.price-section {
+  text-align: center;
+  padding: 20px 0;
+  border-bottom: 1px solid #2a2a3e;
+  margin-bottom: 12px;
+}
+
+.price-label {
+  font-size: 13px;
+  color: #888;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.price-value {
+  font-size: 42px;
+  font-weight: 800;
+  color: #ff6b35;
+  letter-spacing: -1px;
+}
+
+.price-value.sold {
+  color: #4caf50;
+}
+
+/* 信息行 */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #aaa;
+  padding: 4px 0;
+}
+
+/* 排行榜 */
+.ranking-section {
+  margin-top: 16px;
+}
+
+.ranking-section h3 {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.empty {
+  text-align: center;
+  color: #555;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.ranking-list {
+  list-style: none;
+}
+
+.ranking-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #252540;
+  font-size: 14px;
+}
+
+.ranking-item:last-child {
+  border-bottom: none;
+}
+
+.rank {
+  width: 32px;
+  color: #888;
+  font-weight: 600;
+}
+
+.ranking-item:first-child .rank {
+  color: #ffd700;
+}
+
+.ranking-item:nth-child(2) .rank {
+  color: #c0c0c0;
+}
+
+.ranking-item:nth-child(3) .rank {
+  color: #cd7f32;
+}
+
+.user {
+  flex: 1;
+}
+
+.amount {
+  font-weight: 700;
+  color: #ff6b35;
+}
+
+/* 倒计时 */
+.countdown-section {
+  text-align: center;
+  padding: 12px 0;
+  margin-bottom: 8px;
+}
+
+.countdown-section.urgent {
+  animation: pulse 0.5s infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.6; }
+}
+
+.countdown-label {
+  font-size: 12px;
+  color: #888;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.countdown-value {
+  font-size: 36px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #ff6b35;
+}
+
+.countdown-section.urgent .countdown-value {
+  color: #f44336;
+}
+
+/* 被超越提醒 */
+.outbid-alert {
+  color: #f44336;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: auto;
+  animation: flash 0.3s;
+}
+
+@keyframes flash {
+  0% { opacity: 0; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* 出价面板 */
+.bid-panel h3 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.quick-bids {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.quick-bids button {
+  flex: 1;
+  background: #252540;
+  border: 1px solid #3a3a5e;
+  color: #ccc;
+  padding: 10px 0;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.quick-bids button:hover {
+  background: #3a3a5e;
+}
+
+.bid-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.currency {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ff6b35;
+}
+
+.bid-input-row input {
+  flex: 1;
+  background: #0f0f1a;
+  border: 1px solid #3a3a5e;
+  border-radius: 10px;
+  padding: 12px;
+  color: #e0e0e0;
+  font-size: 18px;
+  outline: none;
+}
+
+.bid-input-row input:focus {
+  border-color: #ff6b35;
+}
+
+.bid-btn {
+  background: #ff6b35;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 24px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.bid-btn:hover {
+  background: #e55a25;
+}
+
+.bid-btn:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.bid-status {
+  margin-top: 8px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.bid-status.ok {
+  color: #4caf50;
+}
+
+.bid-status.fail {
+  color: #f44336;
+}
+
+/* 成交信息 */
+.winner-section {
+  text-align: center;
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #4caf50;
+  background: #1a3a1a;
+  border-radius: 12px;
+  margin-top: 12px;
+}
+
+/* 我的排名高亮 */
+.ranking-item.me {
+  background: #2a2a4e;
+  border-radius: 8px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.ranking-item.me .user {
+  color: #ff6b35;
+  font-weight: 700;
+}
