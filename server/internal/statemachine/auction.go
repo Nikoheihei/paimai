@@ -47,9 +47,14 @@ var TransitionTable = map[State]map[Event]State{
 		EventSettleFailed: StateFailed,
 		EventCancel:       StateCancelled,
 	},
+	// 终态显式空表，禁止任何出站迁移
+	StateSold:      {},
+	StateFailed:    {},
+	StateCancelled: {},
 }
 
 // Machine 处理状态转移并验证其正确性。
+// 注意：Machine 非线程安全，不可并发使用，应每次处理状态变更时创建新实例。
 type Machine struct {
 	currentState State
 }
@@ -65,16 +70,17 @@ func (m *Machine) Current() State {
 }
 
 // CanTransition 检查给定事件是否允许从当前状态触发。
-func (m *Machine) CanTransition(event Event) bool {
+// 返回 bool 表示是否允许；当状态机未初始化（空状态）时返回 false 和 ErrInvalidTransition。
+func (m *Machine) CanTransition(event Event) (bool, error) {
 	if m.currentState == "" {
-		return false
+		return false, fmt.Errorf("%w: machine has empty state", ErrInvalidTransition)
 	}
 	transitions, ok := TransitionTable[m.currentState]
 	if !ok {
-		return false
+		return false, nil
 	}
 	_, allowed := transitions[event]
-	return allowed
+	return allowed, nil
 }
 
 // Transition 尝试使用给定事件执行状态迁移；迁移非法时返回 ErrInvalidTransition。
