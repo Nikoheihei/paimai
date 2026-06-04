@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -88,6 +89,14 @@ func (s *adminStoreStub) GetAuction(_ context.Context, id uint64) (*model.Auctio
 
 // UpdateAuction 在内存仓储中覆盖保存竞拍最新状态。
 func (s *adminStoreStub) UpdateAuction(_ context.Context, auction *model.Auction) error {
+	existing, ok := s.auctions[auction.ID]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if existing.Version != auction.Version {
+		return errors.New("auction version conflict")
+	}
+	auction.Version++
 	cp := *auction
 	s.auctions[auction.ID] = &cp
 	return nil
@@ -193,6 +202,21 @@ func (s *adminStoreStub) ListOrdersBySeller(_ context.Context, sellerID uint64) 
 		}
 	}
 	return orders, nil
+}
+
+func (s *adminStoreStub) UpdateOrderStatus(_ context.Context, id uint64, status string, paidAt *time.Time) error {
+	order, ok := s.orders[id]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if order.Status != "pending_payment" {
+		return fmt.Errorf("order %d is not pending_payment, cannot update to %s", id, status)
+	}
+	order.Status = status
+	if paidAt != nil {
+		order.PaidAt = paidAt
+	}
+	return nil
 }
 
 func (s *adminStoreStub) ListRunningExpiredAuctions(_ context.Context) ([]model.Auction, error) {

@@ -8,6 +8,7 @@
 - `server/internal/websocket/hub.go`
 - `server/internal/websocket/client.go`
 - `server/internal/stream/consumer.go`
+- `server/internal/stream/outbox.go`
 
 ## 测试文件
 
@@ -18,6 +19,8 @@
 - readPump / writePump goroutine 退出路径
 - Stream Consumer 的消息解析健壮性
 - ack 确认机制
+- OutboxPoller 轮询逻辑（pending → XADD → done）
+- handleBidAccepted 的 Pipeline 原子性
 - 断线重连的场景覆盖
 
 ## 上下文参考

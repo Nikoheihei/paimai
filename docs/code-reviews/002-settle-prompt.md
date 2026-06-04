@@ -14,12 +14,14 @@
 
 ## 审查重点
 
-- 四种触发方式的幂等性
-- doExecuteSettle 的事务完整性
+- 四种触发方式的幂等性（SettleAuction 入口校验）
+- doExecuteSettle 的 WithTx 事务完整性
+- UpdateAuction 的乐观锁（WHERE id AND version + RowsAffected 检查）
 - 并发结算的安全性
 - 流拍/保留价未达成的判定逻辑
-- 订单状态机（pending_payment → paid / closed）
-- transitionAuction 的乐观锁
+- 订单状态机（pending_payment → paid / closed，PayOrder 用条件更新）
+- SettleExpiredAuctions 批量处理容错（失败继续，返回部分成功）
+- transitionAuction 读-改-写原子性
 - 多商家数据隔离（seller_id 过滤）
 
 ## 上下文参考

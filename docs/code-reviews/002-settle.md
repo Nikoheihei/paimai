@@ -1,114 +1,233 @@
-# Review 批次 002-settle：结算与订单
+# 002-settle Review Report（新架构）
 
-> 审查范围：`server/internal/service/settle.go`、`server/internal/service/admin.go`、`server/internal/service/settle_test.go`、`server/internal/service/admin_test.go`
-> 审查日期：2026-06-04
+> 架构变更（2026-06-04）：
+> - MySQL 是唯一写入点、唯一 Truth Source
+> - 结算仍为同步调用（未改为 Outbox 模式，settleWithRetry 是 goroutine 重试）
 
 ---
 
-### [P0] doExecuteSettle 非事务执行，UpdateAuction 与 CreateOrder 可分叉
+## [P0] doExecuteSettle 非事务：Auction 更新与 Order 创建不原子
 
 - **文件**：`server/internal/service/settle.go:81-144`
-- **类型**：逻辑错误
-- **描述**：`doExecuteSettle` 中成交路径执行了三步独立 DB 操作：① `UpdateAuction(status=sold)` → ② `GetRoom` → ③ `CreateOrder`。若步骤 ① 成功但 ③ 失败（DB 连接断开、唯一约束冲突等），竞拍已标记为 `sold` 但无订单生成。后续幂等重入 `SettleAuction` 会走到 `auction.Status == "sold"` 分支，尝试 `GetOrderByAuction` 失败后注释写"尝试生成"，但代码实际落入 `auction.Status != "running"` 校验，返回错误 `只能结算进行中的竞拍, 当前状态: sold`。该竞拍永远卡在 `sold` 状态无法生成订单。
-- **影响面**：任何导致 `CreateOrder` 失败的瞬时故障都会使竞拍永久无法生成订单，买家无法付款，卖家无法收款。
+- **类型**：数据一致性
+- **描述**：
+  ```go
+  // doExecuteSettle 中三次独立 DB 操作，无事务包裹：
+  s.adminStore.UpdateAuction(ctx, auction)   // ① 更新竞拍状态（Save，无乐观锁）
+  room, roomErr := s.adminStore.GetRoom(ctx, auction.RoomID)  // ② 查 Room 取 SellerID
+  s.adminStore.CreateOrder(ctx, order)       // ③ 创建订单
+  ```
+  如果 ① 成功但 ② 失败 → 竞拍已是 `sold`/`failed`，但订单未创建。
+  如果 ①② 成功但 ③ 失败 → 竞拍已是终态，但无对应订单。
+
+  `settleWithRetry` 重试可缓解，但重试之间竞拍处于不一致状态（状态已改、订单不存在）。且重试最多 2 次，2 次后永久孤儿。
+- **影响面**：竞拍终态无订单，用户看到成交/流拍但无后续流程可走。
 - **建议修复**：
-  1. 将 ①②③ 包裹在同一个 DB 事务中（`repository.WithTx`），① 失败则全部回滚；
-  2. 修复幂等分支：`sold` 状态但无订单时应补创建订单，而非返回错误；
-  3. 或采用 Saga 补偿模式：`CreateOrder` 失败时回退 auction 状态为 `running`。
+  ```go
+  func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auction) (*SettleResult, error) {
+      var result *SettleResult
+      err := s.adminStore.WithTx(ctx, func(tx repository.AdminStore) error {
+          // 判断成交/流拍
+          // tx.UpdateAuction(...)
+          // room, _ := tx.GetRoom(...)
+          // tx.CreateOrder(...)
+          return nil
+      })
+      return result, err
+  }
+  ```
+  注意：`txGormAdminStore.UpdateAuction` 也是 `Save()`（无版本检查），但事务本身保障了原子性。
 
 ---
 
-### [P1] 并发结算缺少乐观锁，可重复生成订单
+## [P0] UpdateAuction 使用 GORM Save() 无乐观锁，并发竞拍 + 结算可覆盖
 
-- **文件**：`server/internal/service/settle.go:41-78`、`server/internal/service/admin.go:267-284`
-- **类型**：并发安全
-- **描述**：`SettleAuction` 读取 auction 后判断状态为 `running`，再调用 `doExecuteSettle` 更新状态。两个并发请求可同时通过状态检查，各自执行 `doExecuteSettle`，导致：① 竞拍状态被覆盖两次（虽然都是 `sold`/`failed`，结果一致）；② `CreateOrder` 执行两次，可能生成重复订单（若 auctionID 唯一索引则第二次报错，导致一个请求失败但 DB 状态已变）。`model.Auction` 已有 `Version int32` 字段但从未使用。
-- **影响面**：多触发源（出价成交 + 过期结算 + 手动结算）并发场景下可产生重复订单或请求失败。
-- **建议修复**：在 `UpdateAuction` 中加入乐观锁 `WHERE version = :old_version`，版本不匹配时返回错误让调用方重试。或在 DB 层使用 `SELECT ... FOR UPDATE` 排他锁。
+- **文件**：`server/internal/repository/admin.go:130`（tx 版）、`admin.go:186`（非 tx 版）
+- **类型**：并发安全 / 数据一致性
+- **描述**：
+  ```go
+  func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error {
+      return s.db.WithContext(ctx).Save(auction).Error  // ← 按主键 UPSERT，不检查 Version！
+  }
+  ```
+  GORM `Save()` 按主键全量覆盖，不使用 `Version` 做乐观锁。而 `UpdateAuctionBidState` 使用 `WHERE version = ?` 做了乐观锁。
 
----
+  调用 `UpdateAuction` 的地方：
+  - `doExecuteSettle`（settle.go:88/102/115）— 结算时改竞拍状态
+  - `transitionAuction`（admin.go:280）— 状态机流转
+  - `StartAuction`（admin.go:247）— 启动竞拍
 
-### [P1] StartAuction 先写 DB 后初始化 Redis 缓存，缓存失败无法回滚
-
-- **文件**：`server/internal/service/admin.go:225-253`
-- **类型**：逻辑错误
-- **描述**：`StartAuction` 先将 auction 更新为 `running` 并写入 DB（第 247 行），再调用 `initAuctionCache` 写入 Redis（第 250 行）。若 `initAuctionCache` 失败（Redis 不可用），函数返回错误，但 DB 中 auction 已是 `running` 状态。此时所有出价请求因 Redis 缓存缺失返回 `AUCTION_CACHE_MISSING`，竞拍实质上不可用，且状态已无法回退。
-- **影响面**：Redis 短暂不可用时，正在启动的竞拍会进入"DB 已启动但 Redis 未初始化"的僵尸状态。
+  如果在 `doExecuteSettle` 读取拍卖后、`Save()` 执行前，另一个并发出价（PlaceBid）通过 `UpdateAuctionBidState` 更新了价格和版本，`Save()` 会静默覆盖掉那次出价的更新。
+- **影响面**：并发出价的价格被结算清空，或结算设置的状态被另一个结算覆盖。
 - **建议修复**：
-  1. 先初始化 Redis 缓存，再更新 DB 状态（Redis 写入可重试，DB 状态变更是"事实"）；
-  2. 或在 `initAuctionCache` 失败时回退 DB 状态为 `scheduled`；
-  3. 或在出价路径中增加缓存懒加载机制：`AUCTION_CACHE_MISSING` 时从 DB 加载缓存后重试出价。
+  `UpdateAuction` 也应使用乐观锁：
+  ```go
+  result := s.db.WithContext(ctx).
+      Model(&model.Auction{}).
+      Where("id = ? AND version = ?", auction.ID, auction.Version).
+      Updates(map[string]interface{}{
+          "status":        auction.Status,
+          "cancel_reason": auction.CancelReason,
+          "version":       gorm.Expr("version + 1"),
+      })
+  // 检查 RowsAffected
+  ```
+  或至少 `doExecuteSettle` 改用 `UpdateAuctionBidState` 风格的条件更新。
 
 ---
 
-### [P1] initAuctionCache WaitReplicas 失败导致启动假失败
+## [P1] SettleExpiredAuctions 批量结算被单次失败中断
 
-- **文件**：`server/internal/service/admin.go:326-327`
-- **类型**：逻辑错误
-- **描述**：与批次 001 同源问题。`initAuctionCache` 最后调用 `WaitReplicas(ctx, 1, 50ms)`，若副本未及时确认则返回错误。此时 DB 已更新、Redis Master 已写入，但调用方收到错误可能认为启动失败。
-- **影响面**：主从延迟波动时，竞拍启动返回 500 但实际已生效。
-- **建议修复**：降级为日志告警，不阻塞启动流程。
-
----
-
-### [P2] SettleExpiredAuctions 部分失败中断，剩余竞拍不结算
-
-- **文件**：`server/internal/service/settle.go:184-199`
-- **类型**：边界遗漏
-- **描述**：`SettleExpiredAuctions` 在循环中遇到第一个 `doExecuteSettle` 错误即中断返回，后续过期竞拍不会被结算。如果某个竞拍因 DB 暂时故障无法结算，其余正常竞拍也被跳过。
-- **影响面**：服务重启时批量结算过期竞拍，一个异常记录可阻塞全部后续结算。
-- **建议修复**：收集错误继续处理，最后汇总报告失败列表。或至少将失败记录记入日志/告警，不中断循环。
-
----
-
-### [P2] SettleAuction 幂等分支 sold 无订单时未补创建
-
-- **文件**：`server/internal/service/settle.go:51-63`
-- **类型**：逻辑错误
-- **描述**：当 `auction.Status == "sold"` 但 `GetOrderByAuction` 返回错误时，注释写"数据异常，尝试生成"，但代码实际没有生成订单——它只是跳出了 `if` 块，随后被 `auction.Status != "running"` 拦截并返回错误。该注释与实现不一致，且未提供数据修复路径。
-- **影响面**：与 [P0] 关联——`doExecuteSettle` 中 `CreateOrder` 失败后，此幂等分支无法自愈。
-- **建议修复**：在 `GetOrderByAuction` 失败后，应继续执行订单创建逻辑（从 auction 获取 winner、从 Room 获取 SellerID），补生成缺失订单。
-
----
-
-### [P2] transitionAuction/StartAuction 无乐观锁保护
-
-- **文件**：`server/internal/service/admin.go:267-284`、`admin.go:225-253`
-- **类型**：并发安全
-- **描述**：与 [P1] 同源。`transitionAuction` 和 `StartAuction` 都是"读→改→写"模式，无版本校验。并发请求可导致后写入覆盖先写入。例如两个 `StartAuction` 请求可能同时读到 `scheduled` 状态，都执行成功但后者覆盖前者的时间设置。
-- **影响面**：管理端并发操作（如误触双击"开始竞拍"）可能导致状态或时间被意外覆盖。
-- **建议修复**：使用 `Version` 字段做乐观锁，或对关键操作加分布式锁。
+- **文件**：`server/internal/service/settle.go:190-197`
+- **类型**：逻辑错误 / 健壮性
+- **描述**：
+  ```go
+  for _, auction := range auctions {
+      a := auction
+      if _, err := s.doExecuteSettle(ctx, &a); err != nil {
+          return count, fmt.Errorf("结算竞拍 %d 失败: %w", auction.ID, err)
+          // ← 第一个失败立即 return，后续过期竞拍无人处理
+      }
+      count++
+  }
+  ```
+  启动时批量结算过期竞拍，如果第 3 个因为 Room 不存在等原因失败，第 4~N 个全部跳过。上次 count 个已结算的成功结果也被丢弃（不返回给调用方）。
+- **影响面**：部分过期竞拍永不被结算，积累在 running 状态下不处理。
+- **建议修复**：
+  ```go
+  var errs []error
+  for _, auction := range auctions {
+      if _, err := s.doExecuteSettle(ctx, &a); err != nil {
+          errs = append(errs, fmt.Errorf("竞拍 %d: %w", auction.ID, err))
+          continue  // 继续处理后续
+      }
+      count++
+  }
+  if len(errs) > 0 {
+      return count, fmt.Errorf("部分结算失败: %v", errors.Join(errs...))
+  }
+  return count, nil
+  ```
 
 ---
 
-### [P3] DeleteProduct 全量加载竞拍列表
+## [P1] transitionAuction 无事务包裹，读-改-写非原子
 
-- **文件**：`server/internal/service/admin.go:450-462`
-- **类型**：性能隐患
-- **描述**：`DeleteProduct` 调用 `ListAuctions(ctx, repository.AuctionFilter{})` 加载全部竞拍到内存后过滤，当竞拍数量增长到万级以上时效率低下。
-- **影响面**：管理端低频操作，当前规模无影响。
-- **建议修复**：增加 `ListAuctionsByProduct(ctx, productID)` 仓储方法，只查询该商品关联的竞拍。
+- **文件**：`server/internal/service/admin.go:267-284`
+- **类型**：并发安全 / 数据一致性
+- **描述**：
+  ```go
+  auction, err := s.getAuction(ctx, id)       // ① 读
+  next, err := transition(auction.Status, event)  // ② 校验
+  auction.Status = string(next)               // ③ 改
+  s.store.UpdateAuction(ctx, auction)         // ④ 写（Save，无版本检查）
+  ```
+  读（①）和写（④）之间有竞态窗口。例如两个并发 CancelAuction：
+  - T1 读到 status="draft"，校验通过，写 status="cancelled"
+  - T2 读到 status="draft"（T1 还没写完），校验通过，也写 status="cancelled"
+
+  两次 `Save()` 都成功，没有数据损失但存在多余操作。更严重的是：
+  - T1 读到 status="scheduled" 执行 PublishAuction → 写 status="running"
+  - T2 读到 status="scheduled"（T1 还没写完）→ 也写 status="running"
+  - 两次 `StartAuction` 都把 `EndAt` 重置为 `now+duration`，第一个设置的结束时间被覆盖
+
+  虽然管理后台并发操作不太频繁，但逻辑上存在缺陷。
+- **影响面**：极端情况下 `StartAuction` 的结束时间被覆盖；`CancelAuction` 的取消原因被覆盖。
+- **建议修复**：`transitionAuction` 也使用 `WITH version` 条件更新，或包裹在事务内。
 
 ---
 
-### [P3] validateNoExtensionRules 允许负值以外的任意值
+## [P2] doExecuteSettle 成交路径的 UpdateAuction 是冗余操作
 
-- **文件**：`server/internal/service/admin.go:412-417`
-- **类型**：边界遗漏
-- **描述**：sudden_death 模式下 `validateNoExtensionRules` 只检查 `extendThreshold < 0 || extendDuration < 0`，允许正数延时参数通过。虽然不影响功能（Lua 脚本中 mode != "extension" 不走延时逻辑），但语义上 sudden_death 模式配置延时参数容易引起混淆。
-- **影响面**：不影响运行时行为，仅语义清晰性。
-- **建议修复**：sudden_death 模式下若传入了正数延时参数，返回警告或直接拒绝（视为配置错误）。
+- **文件**：`server/internal/service/settle.go:113-117`
+- **类型**：逻辑冗余
+- **描述**：
+  ```go
+  // 成交
+  auction.Status = string(statemachine.StateSold)
+  if err := s.adminStore.UpdateAuction(ctx, auction); err != nil {
+      return nil, err
+  }
+  ```
+  当 PlaceBid 触发结算时，竞拍已经在 MySQL 事务中被 `UpdateAuctionBidState` 设置为 `sold`（public.go:252 传入 `newStatus="sold"`）。这里的 `UpdateAuction` 是冗余的全量 `Save()`，只重复设置同值 `status="sold"`，但用 `Save()` 会覆盖版本号（`version` 被重置为旧值）。
+
+  更严重的是：`auction.Version` 是 `doExecuteSettle` 参数传入时的值，而不是数据库当前值。`Save()` 按主键匹配，会把这个过期 version 写回。如果 PlaceBid 已经 `version+1`，`doExecuteSettle` 的 `Save()` 会把 version 回退。
+- **影响面**：乐观锁 version 被回退，后续 `UpdateAuctionBidState` 的版本检查失效。
+- **建议修复**：
+  成交路径跳过后，或改为：
+  ```go
+  // 成交路径无需再设 status，直接跳到创建订单
+  // 只在流拍路径需要 UpdateAuction 设置 status="failed"
+  ```
+  流拍路径（无人出价/保留价未达）确实需要 `UpdateAuction` 来将状态从 `running` 改为 `failed`。
 
 ---
 
-### 测试覆盖评估
+## [P2] StartAuction 中 initAuctionCache 失败不影响竞拍状态，但已写入 DB
 
-| 审查重点 | 覆盖情况 |
-|---|---|
-| 四种触发方式的幂等性 | ⚠️ 部分覆盖（sold/failed 幂等已测，但 sold 无订单的修复路径未测） |
-| doExecuteSettle 的事务完整性 | ❌ 未覆盖（无事务、CreateOrder 失败场景未测） |
-| 并发结算的安全性 | ❌ 未覆盖（无并发测试） |
-| 流拍/保留价未达成的判定逻辑 | ✅ 覆盖 |
-| 订单状态机（pending → paid / closed） | ✅ 覆盖 |
-| transitionAuction 的乐观锁 | ❌ 未覆盖（Version 字段未使用） |
-| 多商家数据隔离（seller_id 过滤） | ⚠️ SellerID 查询已修复，但 ListOrdersBySeller 未测隔离正确性 |
+- **文件**：`server/internal/service/admin.go:247-252`
+- **类型**：数据一致性
+- **描述**：
+  ```go
+  if err := s.store.UpdateAuction(ctx, auction); err != nil {
+      return nil, err  // DB 更新失败 → 正确回滚
+  }
+  if err := s.initAuctionCache(ctx, auction); err != nil {
+      return nil, err  // DB 已写入 running，但返回错误→调用方认为启动失败
+  }
+  ```
+  `UpdateAuction` 成功后竞拍已持久化为 `running`，但如果 `initAuctionCache`（Redis）失败，函数返回 error，调用方认为启动失败。实际上竞拍已经在 running 状态，Redis 缺少缓存。
+
+  `WaitReplicas` 的使用也有问题（initAuctionCache 中 L326）：之前的架构变更说"不再等待 Redis 副本确认"，但 `initAuctionCache` 仍调用 `s.redis.WaitReplicas`。
+- **影响面**：DB 状态和 Redis 缓存不一致；调用方获得错误信号。
+- **建议修复**：
+  - `initAuctionCache` 失败时仅 log warning，不返回 error
+  - 或改为 Outbox 模式：DB 事务中写入 outbox 事件 `auction.started`，Consumer 负责初始化 Redis 缓存
+  - 移除 `WaitReplicas` 调用
+
+---
+
+## [P3] PayOrder 使用 UpdateOrder(Save()) 无版本检查
+
+- **文件**：`server/internal/service/settle.go:167`、`server/internal/repository/admin.go:138/249`
+- **类型**：并发安全（低风险）
+- **描述**：
+  `PayOrder` 读取订单后直接用 `UpdateOrder(Save())` 写回。两个并发的 PayOrder 调用可能都读到 `pending_payment`，都做 `Save()`。虽然没有数据损失（都是写 `paid`），但 `PaidAt` 会被覆盖为后一次的时间。
+- **影响面**：极低，支付场景并发概率小，且都是最终一致状态。
+- **建议修复**：改为条件更新：
+  ```go
+  s.db.Model(&model.Order{}).
+      Where("id = ? AND status = ?", orderID, "pending_payment").
+      Updates(map[string]interface{}{"status": "paid", "paid_at": now})
+  ```
+
+---
+
+## 总结
+
+| 等级 | 数量 | 关键问题 |
+|------|------|----------|
+| P0 | 2 | doExecuteSettle 非事务；UpdateAuction Save() 无乐观锁 |
+| P1 | 2 | SettleExpiredAuctions 失败中断；transitionAuction 读-改-写非原子 |
+| P2 | 2 | 成交路径冗余 UpdateAuction 回退 version；initAuctionCache 失败处理 |
+| P3 | 1 | PayOrder Save() 无版本检查 |
+
+**最优先修复**：P0-1 `doExecuteSettle` 用 `WithTx` 包裹；P0-2 `UpdateAuction` 改为条件更新加 `RowsAffected` 检查（与 `UpdateAuctionBidState` 一致）。
+
+---
+
+## 修复完成状态
+
+> 修复时间：2026-06-04
+
+| 等级 | 问题 | 状态 | 变更 |
+|------|------|:----:|------|
+| P0 | doExecuteSettle 非事务 | ✅ | `settle.go:84` — `WithTx` 包裹，全部操作使用 `tx.*` |
+| P0 | UpdateAuction Save() 无乐观锁 | ✅ | `admin.go:131/211` — tx + non-tx 两版均改为 `WHERE version = ?` + `RowsAffected` 检查 |
+| P1 | SettleExpiredAuctions 失败中断 | ✅ | `settle.go:197-208` — `errs []error` + `continue`，返回部分成功计数 |
+| P1 | transitionAuction 读-改-写非原子 | ✅ | `UpdateAuction` 的乐观锁兜底，版本冲突时正确返回 error |
+| P2 | 成交路径冗余 UpdateAuction | ⚪ | 保留但安全（事务内 + version 检查），注释说明幂等设计 |
+| P2 | initAuctionCache 失败返回 error | ✅ | `admin.go:251` — 忽略错误返回值 |
+| P3 | PayOrder Save() 无版本检查 | ✅ | `settle.go:172` → `UpdateOrderStatus(ctx, id, "paid", &now)` 条件更新 |
+
+> 注意：`initAuctionCache` 失败静默忽略后，Redis 缓存缺失会导致 Lua 预校验返回 `AUCTION_CACHE_MISSING` 拒绝所有出价，需确保 Redis 可用或后续增加补偿初始化机制。

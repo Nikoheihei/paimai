@@ -6,19 +6,21 @@
 
 ## 核心文件
 - `server/internal/service/public.go`
+- `server/internal/repository/admin.go`（WithTx / UpdateAuctionBidState）
 
 ## 测试文件
 - `server/internal/service/public_test.go`
 
 ## 审查重点
 
-- Redis Lua 脚本的原子性（bidScript 字符串）
+- MySQL 事务写入路径（WithTx 内：CreateBid → UpdateAuctionBidState → CreateOutboxEvent）
+- Redis Lua 预校验脚本（bidLiteScript：只读不写，不做幂等/排行榜写入）
 - validateBidInput 的边界校验
-- runBidScript 到 toBidResult 的协议对齐（数组长度 10）
-- persistAcceptedBid 中结算调用时序
-- 异步 goroutine 处理
-- 频率限制逻辑
-- 幂等重放逻辑
+- 事务内读取竞拍是否使用 tx.GetAuction（避免 snapshot 读）
+- UpdateAuctionBidState 的乐观锁 RowsAffected 检查
+- 幂等由 MySQL 唯一索引保证（CreateBid 时 1062/Duplicate 检测）
+- 结算触发的 settleWithRetry（goroutine + 2 次重试）
+- 频率限制的 best-effort 语义
 
 ## 上下文参考
 - `server/internal/model/models.go`

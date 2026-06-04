@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"fmt"
 	"strings"
 	"time"
@@ -247,9 +248,7 @@ func (s *AdminService) StartAuction(ctx context.Context, id uint64, input StartA
 	if err := s.store.UpdateAuction(ctx, auction); err != nil {
 		return nil, err
 	}
-	if err := s.initAuctionCache(ctx, auction); err != nil {
-		return nil, err
-	}
+	s.initAuctionCache(ctx, auction)
 	return auction, nil
 }
 
@@ -318,13 +317,13 @@ func (s *AdminService) initAuctionCache(ctx context.Context, auction *model.Auct
 		"extendThresholdSec": auction.ExtendThresholdSec,
 		"extendDurationSec":  auction.ExtendDurationSec,
 	}).Err(); err != nil {
-		return err
+		log.Printf("[admin] initAuctionCache 失败 (auction=%d): %v — 不影响竞拍启动", auction.ID, err)
+		return nil
 	}
 	if err := s.redis.Master.Expire(ctx, key, 24*time.Hour).Err(); err != nil {
-		return err
+		log.Printf("[admin] initAuctionCache expire 失败 (auction=%d): %v", auction.ID, err)
 	}
-	_, err := s.redis.WaitReplicas(ctx, 1, 50*time.Millisecond)
-	return err
+	return nil
 }
 
 // transition 是状态机的服务层适配函数。

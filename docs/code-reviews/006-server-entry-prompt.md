@@ -17,7 +17,8 @@
 ## 审查重点
 
 - 路由注册顺序与中间件的关系
-- DI 依赖注入完整性
+- DI 依赖注入完整性（adminStore 注入到 NewPublicService）
+- OutboxPoller 启动与 Stream Consumer 的关系
 - 服务启动时结算的安全性
 - CORS 配置
 - WebSocket 升级端点的 CheckOrigin

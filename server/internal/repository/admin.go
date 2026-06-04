@@ -39,6 +39,7 @@ type AdminStore interface {
 	UpdateOrder(ctx context.Context, order *model.Order) error
 	ListOrders(ctx context.Context) ([]model.Order, error)
 	ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error)
+	UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error
 	ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error)
 
 	// Outbox 事件队列
@@ -127,7 +128,23 @@ func (s *txGormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Pr
 func (s *txGormAdminStore) DeleteProduct(ctx context.Context, id uint64) error { return s.db.WithContext(ctx).Delete(&model.Product{}, id).Error }
 func (s *txGormAdminStore) CreateAuction(ctx context.Context, auction *model.Auction) error { return s.db.WithContext(ctx).Create(auction).Error }
 func (s *txGormAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) { var a model.Auction; err := s.db.WithContext(ctx).First(&a, id).Error; return &a, err }
-func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error { return s.db.WithContext(ctx).Save(auction).Error }
+func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error {
+	result := s.db.WithContext(ctx).
+		Model(&model.Auction{}).
+		Where("id = ? AND version = ?", auction.ID, auction.Version).
+		Updates(map[string]interface{}{
+			"status":        auction.Status,
+			"cancel_reason": auction.CancelReason,
+			"version":       gorm.Expr("version + 1"),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("auction version conflict: id=%d version=%d", auction.ID, auction.Version)
+	}
+	return nil
+}
 func (s *txGormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error) { var a []model.Auction; q := s.db.WithContext(ctx); if filter.RoomID != nil { q = q.Where("room_id = ?", *filter.RoomID) }; if filter.Status != "" { q = q.Where("status = ?", filter.Status) }; err := q.Order("id DESC").Find(&a).Error; return a, err }
 func (s *txGormAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error { return s.db.WithContext(ctx).Create(room).Error }
 func (s *txGormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) { var r model.LiveRoom; err := s.db.WithContext(ctx).First(&r, id).Error; return &r, err }
@@ -139,6 +156,14 @@ func (s *txGormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint
 func (s *txGormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error { return s.db.WithContext(ctx).Save(order).Error }
 func (s *txGormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Order("id DESC").Find(&o).Error; return o, err }
 func (s *txGormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&o).Error; return o, err }
+func (s *txGormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error {
+	updates := map[string]interface{}{"status": status}
+	if paidAt != nil {
+		updates["paid_at"] = paidAt
+	}
+	return s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates).Error
+}
+
 func (s *txGormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) { var a []model.Auction; err := s.db.WithContext(ctx).Where("status = ? AND end_at <= ?", "running", time.Now()).Order("id ASC").Find(&a).Error; return a, err }
 func (s *txGormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error) error { panic("nested transaction not supported") }
 
@@ -184,7 +209,21 @@ func (s *GormAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auct
 }
 
 func (s *GormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error {
-	return s.db.WithContext(ctx).Save(auction).Error
+	result := s.db.WithContext(ctx).
+		Model(&model.Auction{}).
+		Where("id = ? AND version = ?", auction.ID, auction.Version).
+		Updates(map[string]interface{}{
+			"status":        auction.Status,
+			"cancel_reason": auction.CancelReason,
+			"version":       gorm.Expr("version + 1"),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("auction version conflict: id=%d version=%d", auction.ID, auction.Version)
+	}
+	return nil
 }
 
 func (s *GormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error) {
@@ -264,6 +303,21 @@ func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64
 		return nil, err
 	}
 	return orders, nil
+}
+
+func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error {
+	updates := map[string]interface{}{"status": status}
+	if paidAt != nil {
+		updates["paid_at"] = paidAt
+	}
+	result := s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("order %d is not pending_payment, cannot update to %s", id, status)
+	}
+	return nil
 }
 
 func (s *GormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
