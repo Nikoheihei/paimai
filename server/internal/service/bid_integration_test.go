@@ -112,6 +112,22 @@ func TestBidPersistenceIntegration(t *testing.T) {
 	if *updated.WinnerUserID != 10 {
 		t.Fatalf("领先用户 = %d，预期 10", *updated.WinnerUserID)
 	}
+	// 验证 Redis 热数据已更新
+	stateKey = fmt.Sprintf("auction:%d:state", auction.ID)
+	redisState, hgetErr := redisClients.Master.HGetAll(ctx, stateKey).Result()
+	if hgetErr != nil {
+		t.Fatalf("获取 Redis 竞拍状态失败: %v", hgetErr)
+	}
+	if redisState["currentPriceCents"] != "500" {
+		t.Errorf("Redis currentPriceCents = %q，预期 500", redisState["currentPriceCents"])
+	}
+	if redisState["status"] != "running" {
+		t.Errorf("Redis status = %q，预期 running", redisState["status"])
+	}
+	if redisState["leaderUserId"] == "0" || redisState["leaderUserId"] == "" {
+		t.Errorf("Redis leaderUserId 应为非 0（出价用户 10），实际 = %q", redisState["leaderUserId"])
+	}
+
 }
 
 // TestWebSocketBroadcastIntegration 验证事件发布后 WebSocket 能收到广播消息。
@@ -187,6 +203,30 @@ func TestWebSocketBroadcastIntegration(t *testing.T) {
 	}
 	if received.Type != "bid.accepted" {
 		t.Fatalf("消息类型 = %s，预期 bid.accepted", received.Type)
+	}
+
+	// 验证 payload 字段
+	var payloadData struct {
+		Type     string `json:"type"`
+		RoomID   uint64 `json:"roomId"`
+		AuctionID uint64 `json:"auctionId"`
+		Payload  json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(received.Data, &payloadData); err != nil {
+		t.Fatalf("解析 WS data 失败: %v", err)
+	}
+	var bidPayload struct {
+		Accepted bool `json:"accepted"`
+		Amount   int64 `json:"amount"`
+	}
+	if err := json.Unmarshal(payloadData.Payload, &bidPayload); err != nil {
+		t.Fatalf("解析出价 payload 失败: %v", err)
+	}
+	if !bidPayload.Accepted {
+		t.Error("expected accepted=true in payload")
+	}
+	if bidPayload.Amount != 500 {
+		t.Errorf("expected amount=500, got %d", bidPayload.Amount)
 	}
 }
 
