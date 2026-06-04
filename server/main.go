@@ -97,7 +97,8 @@ func main() {
 		// 用户端服务（出价、排行榜、直播间）
 		publicStore := repository.NewGormPublicStore(database)
 		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
-		handler.RegisterPublicRoutes(r, publicService, hub)
+				upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: true}
+		handler.RegisterPublicRoutes(r, publicService, hub, upgraderCfg)
 
 		// 启动时结算已过期的 running 竞拍
 		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {

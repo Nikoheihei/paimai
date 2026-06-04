@@ -11,25 +11,25 @@ import (
 	"paimai/internal/service"
 	ws "paimai/internal/websocket"
 	"paimai/pkg/response"
+	"strings"
 )
 
-// upgrader 是 WebSocket 升级器，负责将 HTTP 连接升级为 WebSocket 连接。
-var upgrader = gorillaWs.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	// 允许所有来源的 WebSocket 连接，开发阶段不限制 origin。
-	CheckOrigin: func(r *http.Request) bool { return true },
+// UpgraderConfig 保存 WebSocket Upgrader 的配置选项。
+type UpgraderConfig struct {
+	// AllowAllOrigins 为 true 时允许所有 Origin（开发阶段）
+	AllowAllOrigins bool
 }
 
 // PublicHandler 负责用户端直播间、竞拍详情、排行榜和出价 API 的 HTTP 适配。
 type PublicHandler struct {
 	service *service.PublicService
+	cfg     *UpgraderConfig
 	hub     *ws.Hub
 }
 
 // RegisterPublicRoutes 注册用户端 REST API 路由。
-func RegisterPublicRoutes(r *gin.Engine, publicService *service.PublicService, hub *ws.Hub) {
-	h := &PublicHandler{service: publicService, hub: hub}
+func RegisterPublicRoutes(r *gin.Engine, publicService *service.PublicService, hub *ws.Hub, cfg *UpgraderConfig) {
+	h := &PublicHandler{service: publicService, hub: hub, cfg: cfg}
 	api := r.Group("/api")
 	{
 		api.GET("/rooms", h.listLiveRooms)
@@ -157,12 +157,12 @@ func (h *PublicHandler) serveWS(c *gin.Context) {
 		return
 	}
 
-	// 开发阶段跳过直播间存在校验，生产环境应打开
-	// _, err := h.service.GetRoom(c.Request.Context(), roomID)
-	// if err != nil {
-	// 	writeResult(c, nil, err)
-	// 	return
-	// }
+	// 校验直播间存在性
+	_, err := h.service.GetRoom(c.Request.Context(), roomID)
+	if err != nil {
+		writeResult(c, nil, err)
+		return
+	}
 
 	// 优先从 JWT context 获取 userId，兼容开发阶段仍然传 query 参数
 	userID, _ := c.Get("userId")
@@ -177,6 +177,18 @@ func (h *PublicHandler) serveWS(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, 400, "userId is required")
 			return
 		}
+	}
+	// 创建 upgrader（使用配置控制 CheckOrigin 策略）
+	upgrader := gorillaWs.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			if h.cfg.AllowAllOrigins {
+				return true
+			}
+			origin := r.Header.Get("Origin")
+			return origin == "" || strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1")
+		},
 	}
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {

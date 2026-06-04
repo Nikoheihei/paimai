@@ -12,17 +12,22 @@ import (
 	"paimai/internal/repository"
 )
 
+// RedisXAdder 是 OutboxPoller 依赖的 Redis 写入接口，用于测试 mock。
+type RedisXAdder interface {
+	XAdd(ctx context.Context, a *goredis.XAddArgs) *goredis.StringCmd
+}
+
 // OutboxPoller 轮询 MySQL outbox 表，将 pending 事件投递到 Redis Stream。
 type OutboxPoller struct {
 	adminStore repository.AdminStore
-	redis      *goredis.Client
+	redis      RedisXAdder
 	streamKey  string
 	interval   time.Duration
 	batchSize  int
 }
 
 // NewOutboxPoller 创建 outbox 轮询器。
-func NewOutboxPoller(store repository.AdminStore, redis *goredis.Client) *OutboxPoller {
+func NewOutboxPoller(store repository.AdminStore, redis RedisXAdder) *OutboxPoller {
 	return &OutboxPoller{
 		adminStore: store,
 		redis:      redis,
@@ -50,6 +55,7 @@ func (p *OutboxPoller) Start(ctx context.Context) {
 }
 
 // pollOnce 执行一次轮询：取 pending 事件 → XADD → 标记 done。
+// 这是 at-least-once 语义，消费端通过 eventUUID 做幂等去重。
 func (p *OutboxPoller) pollOnce(ctx context.Context) {
 	events, err := p.adminStore.PickPendingOutboxEvents(ctx, p.batchSize)
 	if err != nil {
@@ -67,7 +73,7 @@ func (p *OutboxPoller) pollOnce(ctx context.Context) {
 			continue
 		}
 		if err := p.adminStore.MarkOutboxEventDone(ctx, evt.ID); err != nil {
-			log.Printf("[outbox] mark event %d done failed: %v", evt.ID, err)
+			log.Printf("[outbox] mark event %d done failed (will retry): %v", evt.ID, err)
 		}
 	}
 }

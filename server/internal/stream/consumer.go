@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -13,10 +15,28 @@ import (
 	ws "paimai/internal/websocket"
 )
 
+// RedisStateWriter 封装 Pipeline 中的状态写入操作，用于测试 mock。
+type RedisStateWriter interface {
+	HSet(ctx context.Context, key string, values ...interface{}) *goredis.IntCmd
+	Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd
+	ZAdd(ctx context.Context, key string, members ...goredis.Z) *goredis.IntCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.StatusCmd
+}
+
+// RedisStreamClient 是 Consumer 依赖的 Redis 操作接口，用于测试 mock。
+type RedisStreamClient interface {
+	Do(ctx context.Context, args ...interface{}) *goredis.Cmd
+	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.BoolCmd
+	NewStateWriter() RedisStateWriter
+	XAck(ctx context.Context, stream, group string, messageID ...string) *goredis.IntCmd
+	XReadGroup(ctx context.Context, a *goredis.XReadGroupArgs) *goredis.XStreamSliceCmd
+}
+
+var consumerName = fmt.Sprintf("instance-%d", os.Getpid())
+
 const (
 	streamKey       = "auction:events"
 	consumerGroup   = "auction:processors"
-	consumerName    = "instance-1"
 	maxStreamLen    = 10000
 	pollInterval    = 2 * time.Second
 )
@@ -55,20 +75,59 @@ func (p *Publisher) Publish(ctx context.Context, evt Event) error {
 }
 
 // Consumer 负责消费 Redis Stream 中的事件，更新 Redis 状态和通过 WebSocket Hub 广播。
-type Consumer struct {
+// goredisStateWriter 包装 *goredis.Client 的 Pipeline。
+type goredisStateWriter struct {
+	pipe goredis.Pipeliner
+}
+
+func (w *goredisStateWriter) HSet(ctx context.Context, key string, values ...interface{}) *goredis.IntCmd {
+	return w.pipe.HSet(ctx, key, values...)
+}
+func (w *goredisStateWriter) Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd {
+	return w.pipe.Expire(ctx, key, expiration)
+}
+func (w *goredisStateWriter) ZAdd(ctx context.Context, key string, members ...goredis.Z) *goredis.IntCmd {
+	return w.pipe.ZAdd(ctx, key, members...)
+}
+func (w *goredisStateWriter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.StatusCmd {
+	return w.pipe.Set(ctx, key, value, expiration)
+}
+
+// goredisClientAdapter 包装 *goredis.Client 使其满足 RedisStreamClient 接口。
+type goredisClientAdapter struct {
 	client *goredis.Client
+}
+
+func (a *goredisClientAdapter) Do(ctx context.Context, args ...interface{}) *goredis.Cmd {
+	return a.client.Do(ctx, args...)
+}
+func (a *goredisClientAdapter) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.BoolCmd {
+	return a.client.SetNX(ctx, key, value, expiration)
+}
+func (a *goredisClientAdapter) NewStateWriter() RedisStateWriter {
+	return &goredisStateWriter{pipe: a.client.Pipeline()}
+}
+func (a *goredisClientAdapter) XAck(ctx context.Context, stream, group string, messageID ...string) *goredis.IntCmd {
+	return a.client.XAck(ctx, stream, group, messageID...)
+}
+func (a *goredisClientAdapter) XReadGroup(ctx context.Context, args *goredis.XReadGroupArgs) *goredis.XStreamSliceCmd {
+	return a.client.XReadGroup(ctx, args)
+}
+
+type Consumer struct {
+	client RedisStreamClient
 	hub    *ws.Hub
 }
 
 // NewConsumer 创建 Stream 事件消费者。
 func NewConsumer(client *goredis.Client, hub *ws.Hub) *Consumer {
-	return &Consumer{client: client, hub: hub}
+	return &Consumer{client: &goredisClientAdapter{client: client}, hub: hub}
 }
 
 // ensureGroup 确保 Stream 消费者组存在。
 func (c *Consumer) ensureGroup(ctx context.Context) error {
 	err := c.client.Do(ctx, "XGROUP", "CREATE", streamKey, consumerGroup, "0", "MKSTREAM").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return err
 	}
 	return nil
@@ -103,6 +162,9 @@ func (c *Consumer) poll(ctx context.Context) {
 		Block:    pollInterval,
 	}).Result()
 	if err != nil {
+		if err != goredis.Nil {
+			log.Printf("[stream] poll error: %v", err)
+		}
 		return
 	}
 	if len(result) == 0 {
@@ -132,10 +194,24 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 		return
 	}
 
+	// 从 payload 提取 eventUUID 用于去重
+	eventUUID := extractEventUUID(evt.Payload)
+	if eventUUID != "" {
+		// SETNX 去重：已处理过则直接 ack 跳过
+		ok, err := c.client.SetNX(ctx, "event:"+eventUUID, "1", 86400*time.Second).Result()
+		if err != nil {
+			log.Printf("[stream] 去重检查失败 (uuid=%s): %v", eventUUID, err)
+		} else if !ok {
+			log.Printf("[stream] 跳过重复事件 (uuid=%s)", eventUUID)
+			c.ack(ctx, message.ID)
+			return
+		}
+	}
+
 	// 根据事件类型处理
 	switch evt.Type {
 	case "bid.accepted":
-		c.handleBidAccepted(ctx, &evt)
+		c.handleBidAccepted(ctx, &evt, message.ID)
 	default:
 		log.Printf("[stream] 未知事件类型: %s", evt.Type)
 	}
@@ -150,7 +226,7 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 }
 
 // handleBidAccepted 处理出价事件：更新 Redis 竞拍状态和排行榜。
-func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event) {
+func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event, messageID string) {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		log.Printf("[stream] 解析 bid.accepted payload 失败: %v", err)
@@ -178,33 +254,38 @@ func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event) {
 	stateKey := fmt.Sprintf("auction:%d:state", auctionID)
 	bidsKey := fmt.Sprintf("auction:%d:bids", auctionID)
 
-	pipe := c.client.Pipeline()
+	writer := c.client.NewStateWriter()
 
-	// 更新竞拍状态（HSET）
-	pipe.HSet(ctx, stateKey, map[string]interface{}{
-		"status":             status,
-		"currentPriceCents":  strconv.FormatInt(price, 10),
-		"leaderUserId":       strconv.FormatUint(userID, 10),
-	})
-	pipe.Expire(ctx, stateKey, 86400*time.Second)
+	// 批量写入 Redis 状态
+	writer.HSet(ctx, stateKey,
+		"status", status,
+		"currentPriceCents", strconv.FormatInt(price, 10),
+		"leaderUserId", strconv.FormatUint(userID, 10),
+	)
+	writer.Expire(ctx, stateKey, 86400*time.Second)
 
-	// 更新排行榜（ZSet — 以最高出价为 score）
-	pipe.ZAdd(ctx, bidsKey, goredis.Z{
+	writer.ZAdd(ctx, bidsKey, goredis.Z{
 		Score:  float64(amount),
 		Member: strconv.FormatUint(userID, 10),
 	})
-	pipe.Expire(ctx, bidsKey, 86400*time.Second)
+	writer.Expire(ctx, bidsKey, 86400*time.Second)
 
-	// 记录最后出价时间（频率检查用）
 	lastTsKey := fmt.Sprintf("auction:%d:last_bid_ts:%d", auctionID, userID)
-	pipe.Set(ctx, lastTsKey, time.Now().UnixMilli(), 86400*time.Second)
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("[stream] 更新 Redis 状态失败 (auction=%d): %v", auctionID, err)
-		return
-	}
+	writer.Set(ctx, lastTsKey, time.Now().UnixMilli(), 86400*time.Second)
 
 	// sold 状态已在 Pipeline 的 HSET 中设置（payload.status 为 "sold"），无需重复写入
+}
+
+// extractEventUUID 从事件 payload 中提取 eventUUID 字段。
+func extractEventUUID(raw json.RawMessage) string {
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	if id, ok := m["eventId"].(string); ok {
+		return id
+	}
+	return ""
 }
 
 // ack 确认消息处理完成。

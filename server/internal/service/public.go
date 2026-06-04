@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -266,10 +267,13 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			"extended":  extended,
 			"roomId":    auction.RoomID,
 		})
+		// 生成事件 UUID 用于消费端去重
+		eventUUID := uuid()
 		if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
 			EventType: "bid.accepted",
 			Payload:   string(eventPayload),
 			Status:    "pending",
+			EventUUID: eventUUID,
 		}); err != nil {
 			return err
 		}
@@ -633,4 +637,18 @@ func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64) (*mod
 		return nil, errors.New("settle service unavailable")
 	}
 	return s.settle.PayOrder(ctx, orderID)
+}
+
+// uuid 生成一个简单的 v4 风格 UUID（无横线，32 位 hex），用于事件去重。
+func uuid() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("uuid generation failed: %v", err)
+	}
+	// v4 UUID: 第 7 字节的高 4 位为 4，第 9 字节的高 2 位为 10
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x",
+		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
 }

@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -24,11 +25,12 @@ const (
 
 // Client 表示一个 WebSocket 连接，绑定了所属房间和用户信息。
 type Client struct {
-	hub    *Hub
-	roomID uint64
-	userID uint64
-	conn   *websocket.Conn
-	send   chan []byte
+	hub       *Hub
+	roomID    uint64
+	userID    uint64
+	conn      *websocket.Conn
+	send      chan []byte
+	closeOnce sync.Once // 确保 close(send) 只调用一次
 }
 
 // NewClient 创建一个新的 WebSocket 客户端实例，并启动读写协程。
@@ -46,7 +48,11 @@ func NewClient(hub *Hub, roomID uint64, userID uint64, conn *websocket.Conn) *Cl
 // 客户端发送的消息保留给未来扩展（如聊天、自定义订阅）。
 func (c *Client) ReadPump() {
 	defer func() {
-		c.hub.unregister <- c
+		select {
+		case c.hub.events <- HubEvent{Type: EventUnregister, Client: c}:
+		default:
+			log.Printf("[websocket] unregister channel full, client %d dropped", c.userID)
+		}
 		c.conn.Close()
 	}()
 

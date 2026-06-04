@@ -121,6 +121,8 @@ func (s *txGormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64)
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
 }
 
+
+
 // txGormAdminStore 中需要实现的 AdminStore 其余方法（事务传播）
 func (s *txGormAdminStore) CreateProduct(ctx context.Context, product *model.Product) error { return s.db.WithContext(ctx).Create(product).Error }
 func (s *txGormAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) { var p []model.Product; q := s.db.WithContext(ctx); if sellerID != nil { q = q.Where("seller_id = ?", *sellerID) }; err := q.Order("id DESC").Find(&p).Error; return p, err }
@@ -378,3 +380,5 @@ func (s *GormAdminStore) MarkOutboxEventDone(ctx context.Context, id uint64) err
 func (s *GormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) error {
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
 }
+
+

@@ -7,13 +7,26 @@ import (
 
 // Hub 管理所有直播间及其 WebSocket 客户端连接。
 // 每个 roomId 对应一个 Room，出价事件按 roomId 隔离广播。
-type Hub struct {
-	mu    sync.RWMutex
-	rooms map[uint64]*Room
+// HubEventType 表示 Hub 事件队列中的事件类型。
+type HubEventType int
 
-	// register / unregister 通道用于在 Hub goroutine 中安全地增删客户端。
-	register   chan *Client
-	unregister chan *Client
+const (
+	EventRegister   HubEventType = iota
+	EventUnregister
+	EventDead
+)
+
+// HubEvent 是 Hub 事件队列中的一条事件，由 Hub.Run 单 goroutine 串行处理。
+type HubEvent struct {
+	Type   HubEventType
+	Client *Client
+}
+
+// Hub 管理所有直播间及其 WebSocket 客户端连接。
+type Hub struct {
+	mu     sync.RWMutex
+	rooms  map[uint64]*Room
+	events chan HubEvent
 }
 
 // Room 表示一个直播间内的所有 WebSocket 客户端集合。
@@ -24,77 +37,102 @@ type Room struct {
 // NewHub 创建 WebSocket Hub 实例，后台不启动 goroutine（由 ServeHTTP 启动点控制）。
 func NewHub() *Hub {
 	return &Hub{
-		rooms:      make(map[uint64]*Room),
-		register:   make(chan *Client, 256),
-		unregister: make(chan *Client, 256),
+		rooms:  make(map[uint64]*Room),
+		events: make(chan HubEvent, 512),
 	}
 }
 
 // Run 在独立的 goroutine 中处理客户端的注册与注销。
 // 确保同一时刻只有这个 goroutine 修改 Hub.clients 和 Room.clients 结构。
+// Run 在独立的 goroutine 中串行消费事件队列。
+// 这是 Hub 的唯一 state owner，所有对 rooms 和 client.send 的修改都在这里完成。
 func (h *Hub) Run() {
-	for {
-		select {
-		case client := <-h.register:
+	for e := range h.events {
+		switch e.Type {
+		case EventRegister:
 			h.mu.Lock()
-			room, ok := h.rooms[client.roomID]
+			room, ok := h.rooms[e.Client.roomID]
 			if !ok {
 				room = &Room{clients: make(map[*Client]bool)}
-				h.rooms[client.roomID] = room
+				h.rooms[e.Client.roomID] = room
 			}
-			room.clients[client] = true
+			room.clients[e.Client] = true
 			h.mu.Unlock()
-			log.Printf("[websocket] client %d joined room %d", client.userID, client.roomID)
+			log.Printf("[websocket] client %d joined room %d", e.Client.userID, e.Client.roomID)
 
-		case client := <-h.unregister:
-			h.mu.Lock()
-			if room, ok := h.rooms[client.roomID]; ok {
-				if _, exists := room.clients[client]; exists {
-					delete(room.clients, client)
-					close(client.send)
-					log.Printf("[websocket] client %d left room %d", client.userID, client.roomID)
-					if len(room.clients) == 0 {
-						delete(h.rooms, client.roomID)
-						log.Printf("[websocket] room %d closed (no clients)", client.roomID)
-					}
-				}
-			}
-			h.mu.Unlock()
+		case EventUnregister:
+			h.cleanupClient(e.Client, "left")
+
+		case EventDead:
+			h.cleanupClient(e.Client, "slow")
 		}
 	}
 }
 
-// Broadcast 向指定房间内的所有客户端发送消息。
-// Register 将客户端注册到 Hub，由 Hub.Run 的 goroutine 处理。
-func (h *Hub) Register(client *Client) {
-	h.register <- client
+// cleanupClient 从 room 中移除 client 并关闭 send channel。
+// 必须在 Hub.Run goroutine 中调用。
+func (h *Hub) cleanupClient(client *Client, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room, ok := h.rooms[client.roomID]; ok {
+		if _, exists := room.clients[client]; exists {
+			delete(room.clients, client)
+			client.closeOnce.Do(func() { close(client.send) })
+			log.Printf("[websocket] client %d %s room %d", client.userID, reason, client.roomID)
+			if len(room.clients) == 0 {
+				delete(h.rooms, client.roomID)
+				log.Printf("[websocket] room %d closed (no clients)", client.roomID)
+			}
+		}
+	}
 }
 
-// Unregister 将客户端从 Hub 注销。
-func (h *Hub) Unregister(client *Client) {
-	h.unregister <- client
+// Register 发送注册事件到 Hub 事件队列，由 Hub.Run 异步处理。
+func (h *Hub) Register(client *Client) {
+	h.events <- HubEvent{Type: EventRegister, Client: client}
 }
+
+// Unregister 发送注销事件到 Hub 事件队列，由 Hub.Run 异步处理。
+func (h *Hub) Unregister(client *Client) {
+	h.events <- HubEvent{Type: EventUnregister, Client: client}
+}
+
 func (h *Hub) Broadcast(roomID uint64, message []byte) {
 	h.mu.RLock()
 	room, ok := h.rooms[roomID]
-	h.mu.RUnlock()
-
 	if !ok {
+		h.mu.RUnlock()
 		return
 	}
+	// 在 RLock 保护下拷贝客户端列表，避免遍历时 map 被修改
+	clients := make([]*Client, 0, len(room.clients))
+	for c := range room.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
 
-	// 遍历客户端发送消息，不阻塞慢客户端
-	for client := range room.clients {
-		select {
-		case client.send <- message:
-		default:
-			// 客户端 send buffer 满了，说明写入过慢，断开连接
-			h.mu.Lock()
-			delete(room.clients, client)
-			close(client.send)
-			h.mu.Unlock()
-			log.Printf("[websocket] client %d dropped (send buffer full)", client.userID)
-		}
+	// 遍历拷贝后的列表发送消息
+	// 注意：遍历期间其他 goroutine 可能通过 Hub.Run 关闭 client.send，
+	// 用 recover 捕获 send on closed channel panic 安全忽略。
+	for _, client := range clients {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// client 可能在遍历开始后被 Hub.Run 关闭，忽略即可
+				}
+			}()
+			select {
+			case client.send <- message:
+			default:
+				// 慢客户端：仅发送到 dead channel，不处理生命周期
+				// Hub.Run 会统一 delete + close(send)
+				select {
+				case h.events <- HubEvent{Type: EventDead, Client: client}:
+				default:
+					log.Printf("[websocket] dead channel full, client %d dropped", client.userID)
+				}
+			}
+		}()
 	}
 }
 

@@ -100,5 +100,6 @@ type OutboxEvent struct {
 	EventType string    `gorm:"size:64;not null;index" json:"eventType"`
 	Payload   string    `gorm:"type:text;not null" json:"payload"`
 	Status    string    `gorm:"type:enum('pending','done','failed');default:'pending';not null;index" json:"status"`
+	EventUUID string    `gorm:"size:64;not null;uniqueIndex;default:''" json:"eventUuid"`
 	CreatedAt time.Time `json:"createdAt"`
 }

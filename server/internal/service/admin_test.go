@@ -268,6 +268,8 @@ func (s *adminStoreStub) MarkOutboxEventFailed(_ context.Context, id uint64) err
 	return nil
 }
 
+
+
 func TestAdminServiceAuctionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store := newAdminStoreStub()
