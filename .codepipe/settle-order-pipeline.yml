@@ -1,0 +1,64 @@
+pipeline: settle-order
+domain: "竞拍结束 → 判断成交/流拍 → 生成订单 → 支付模拟"
+
+version: "1.0"
+
+dependencies:
+  - "bid-closed-loop"
+  - "websocket-push"
+
+input:
+  - "状态机定义（StateSold, StateFailed, EventSettleSold, EventSettleFailed）"
+  - "Order 模型（pending_payment / paid / closed）"
+  - "Auction 模型（winnerUserId, status, currentPriceCents）"
+  - "现有 AdminStore / PublicStore 接口模式"
+
+verification_gates:
+  - id: compile
+    type: "shell"
+    command: "go build ./..."
+    description: "编译验证"
+    auto_fix: true
+
+  - id: unit-tests
+    type: "shell"
+    command: "go test ./... -count=1"
+    description: "全量单元测试"
+    auto_fix: true
+
+  - id: integration-tests
+    type: "shell"
+    command: "go test -tags=integration -count=1 ./... 2>&1"
+    description: "集成测试（需 Docker）"
+    auto_fix: false
+    optional: true
+
+workflow:
+  - step: "AdminStore 接口新增 CreateOrder / GetOrder / UpdateOrder / ListOrders"
+    check: "compile"
+  - step: "GormAdminStore 实现新增方法"
+    check: "compile"
+  - step: "新增 internal/service/settle.go — SettleService（结算核心逻辑）"
+    check: "compile"
+  - step: "新增 internal/handler/settle.go — settleAuction + listOrders + payOrder handler"
+    check: "compile"
+  - step: "修改 main.go — 注册结算路由 + 启动结算定时器"
+    check: "compile"
+  - step: "注册 SettleService 依赖"
+    check: "compile"
+  - step: "全量单元测试"
+    check: "unit-tests"
+
+output:
+  - "server/internal/repository/admin.go"        # MODIFY
+  - "server/internal/service/settle.go"          # [NEW]
+  - "server/internal/service/settle_test.go"     # [NEW]
+  - "server/internal/handler/settle.go"          # [NEW]
+  - "server/main.go"                              # MODIFY
+
+min_pass_rate: 0.85
+
+metadata:
+  author: "AI Dev Pipeline"
+  created: "2026-06-02"
+  deviation_log: "docs/rules/deviations-log.md"

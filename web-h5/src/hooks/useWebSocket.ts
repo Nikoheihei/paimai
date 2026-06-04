@@ -5,10 +5,11 @@
  *  - 连接 / 自动重连（指数退避）
  *  - 心跳保活（ping/pong）
  *  - 消息分发（按 type 回调）
- *  - 断线时自动清理，重连后通知外部重新拉取房间状态
+ *  - JWT token 携带（优先 Authorization 头，兼容 query 参数 fallback）
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { getToken } from '../api/client'
 
 export type WsMessage = {
   type: string
@@ -28,10 +29,7 @@ const PING_INTERVAL_MS = 25000
 /**
  * useWebSocket — 连接竞拍直播间的 WebSocket，自动处理重连和心跳。
  *
- * @param roomId  直播间ID
- * @param userId  当前用户ID
- * @param handlers 消息回调
- * @returns 连接状态和手动重连方法
+ * JWT token 通过 query 参数 ?token=xxx 传递（WebSocket 无法自定义请求头）。
  */
 export function useWebSocket(
   roomId: number | undefined,
@@ -71,7 +69,11 @@ export function useWebSocket(
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host || 'localhost:8080'
-    const url = `${protocol}//${host}/api/rooms/${roomId}/ws?userId=${userId}`
+
+    // 优先携带 JWT token（WebSocket 不支持自定义头，通过 query 传递）
+    const token = getToken()
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+    const url = `${protocol}//${host}/api/rooms/${roomId}/ws?userId=${userId}${tokenParam}`
 
     const ws = new WebSocket(url)
     wsRef.current = ws
@@ -110,7 +112,7 @@ export function useWebSocket(
         const msg: WsMessage = JSON.parse(event.data)
         handlersRef.current.onMessage?.(msg)
       } catch {
-        // 忽略非 JSON 消息（如 ping 响应）
+        // 忽略非 JSON 消息
       }
     }
 

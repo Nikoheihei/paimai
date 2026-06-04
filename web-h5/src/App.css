@@ -361,3 +361,365 @@ body {
   color: #ff6b35;
   font-weight: 700;
 }
+
+/* ========== 登录页面样式 ========== */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 90vh;
+}
+
+.login-card {
+  background: #1a1a2e;
+  border-radius: 16px;
+  padding: 32px 24px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.login-title {
+  text-align: center;
+  font-size: 28px;
+  font-weight: 800;
+  color: #ff6b35;
+  margin-bottom: 4px;
+}
+
+.login-subtitle {
+  text-align: center;
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 24px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  color: #aaa;
+  margin-bottom: 4px;
+}
+
+.form-group input {
+  width: 100%;
+  background: #0f0f1a;
+  border: 1px solid #3a3a5e;
+  border-radius: 10px;
+  padding: 12px;
+  color: #e0e0e0;
+  font-size: 15px;
+  outline: none;
+}
+
+.form-group input:focus {
+  border-color: #ff6b35;
+}
+
+.form-error {
+  color: #f44336;
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.login-btn {
+  width: 100%;
+  background: #ff6b35;
+  border: none;
+  border-radius: 10px;
+  padding: 14px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.login-btn:hover {
+  background: #e55a25;
+}
+
+.login-btn:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.switch-mode {
+  text-align: center;
+  font-size: 13px;
+  color: #888;
+  margin-top: 16px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #ff6b35;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: #e55a25;
+}
+
+/* 用户标签 */
+.user-tag {
+  font-size: 12px;
+  color: #888;
+  background: #252540;
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+
+/* ========== H5 底部导航 ========== */
+
+.h5-nav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: #1a1a2e;
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.h5-nav a {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: #888;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.h5-nav a.active {
+  background: #ff6b35;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ========== 订单页面 ========== */
+
+.order-page {
+  animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.page-header h2 {
+  font-size: 18px;
+  flex: 1;
+}
+
+.back-btn {
+  background: #2a2a3e;
+  border: none;
+  color: #aaa;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.back-btn:hover { background: #3a3a5e; }
+
+.order-card {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.order-card:active { background: #252540; }
+
+.order-card-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 14px;
+}
+
+.order-card-row.meta {
+  font-size: 12px;
+  color: #666;
+}
+
+.order-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.order-status.pending_payment {
+  background: #3a3a1a;
+  color: #ff9800;
+}
+
+.order-status.paid {
+  background: #1a3a1a;
+  color: #4caf50;
+}
+
+.order-status.closed {
+  background: #2a2a2a;
+  color: #888;
+}
+
+.price {
+  color: #ff6b35;
+  font-weight: 700;
+}
+
+.order-detail {
+  margin-top: 12px;
+}
+
+.order-detail .info-row {
+  padding: 6px 0;
+  border-bottom: 1px solid #252540;
+}
+
+.order-detail .info-row:last-child {
+  border-bottom: none;
+}
+
+.toast {
+  background: #1a1a2e;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ========== 直播间列表（首页） ========== */
+
+.room-list-page {
+  animation: fadeIn 0.2s;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: #888;
+}
+
+.empty-state .sub {
+  font-size: 13px;
+  margin-top: 8px;
+  color: #555;
+}
+
+.room-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-card {
+  background: #1a1a2e;
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.room-card:active {
+  transform: scale(0.98);
+}
+
+.room-card-cover {
+  height: 120px;
+  background: linear-gradient(135deg, #2a2a4e 0%, #1a1a2e 100%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 10px;
+  position: relative;
+}
+
+.live-badge {
+  background: #f44336;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+  animation: pulse 1.5s infinite;
+}
+
+.room-card-body {
+  padding: 12px 16px;
+}
+
+.room-card-body h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.room-card-meta {
+  font-size: 12px;
+  color: #888;
+}
+
+/* ========== 返回按钮 ========== */
+
+.back-btn {
+  background: #2a2a3e;
+  border: none;
+  color: #aaa;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.back-btn:hover { background: #3a3a5e; }
+
+.logout-link {
+  background: transparent;
+  border: 1px solid #3a3a5e;
+  color: #888;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.logout-link:hover {
+  border-color: #f44336;
+  color: #f44336;
+}

@@ -171,6 +171,50 @@ GET /api/rooms/:roomId/ws?userId=<user_id>
 | 前端一次性构建通过 | 否（TS 类型错误，修复后通过） |
 | 偏差记录 | 本次未产生新规则库条目 |
 
+## 三、建议人工 Code Review 的重点
+
+### 🔴 高优先级（请务必审查）
+
+1. **Redis Stream 消费者组幂等性**
+   - 文件：`internal/stream/consumer.go`
+   - 当前架构为单实例消费者（`consumerName = "instance-1"`），如果未来扩容到多实例，需要确保 `XREADGROUP` 的消费者名唯一，否则会重复消费
+   - **请确认当前单实例部署是否满足需求**
+
+2. **WebSocket 客户端断开清理**
+   - 文件：`internal/websocket/client.go` 的 `readPump`
+   - 客户端断开后，`readPump` 会调用 `hub.Unregister(client)` 并从房间移除
+   - 但 `writePump` 中的 `ticker`（ping 定时器）是否在 client 被清理后正确停止？请检查 `client.send` 关闭对两个 goroutine 的信号传递
+
+### 🟡 中等优先级
+
+3. **Broadcast 的慢客户端处理策略**
+   - 文件：`internal/websocket/hub.go` 的 `Broadcast`
+   - 慢客户端（send buffer 满）会被直接断开丢弃
+   - **确认这个策略是否适合你的场景**：弱网用户可能会频繁断连
+
+4. **出价事件的 Stream 与 WS 之间没有背压控制**
+   - 出价写入 Stream 频率不限，WS 广播可能会成为瓶颈
+   - 当前 `maxStreamLen = 10000` 可防止 Stream 无限膨胀，但 WS 广播的 goroutine 不会反压上游
+
+### 🟢 低优先级
+
+5. **WebSocket 连接未校验 token**
+   - 当前通过 URL query 传 `userId`，生产环境应先通过 JWT 鉴权再建立 WS 连接
+   - 已规划在待启动闭环 #205 中处理
+
+---
+
+## 四、与规则库的对账
+
+| 规则 ID | 状态 | 备注 |
+|---|---|---|
+| `ws-connection-auth` | ⏳ 待覆盖 | 当前用 query 参数 userId，未用 JWT |
+| `ws-heartbeat-ping` | ✅ 已覆盖 | 服务端 ping / 客户端 pong 双向心跳 |
+| `ws-reconnect-recovery` | ⏳ 待覆盖 | 前端有重连逻辑，但后端不保存断线状态 |
+| `ws-slow-client-drop` | ✅ 已覆盖 | send buffer 满自动断开 |
+| `stream-event-retry` | ⏳ 未实现 | 当前消费失败直接 ack，不重试 |
+
+
 ---
 
 *报告生成：2026-06-02 | 下轮建议产线：`settle-order`（结算与订单）或补充集成测试*

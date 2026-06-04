@@ -1,0 +1,55 @@
+package handler
+
+import (
+	"github.com/gin-gonic/gin"
+
+	"paimai/internal/service"
+	"paimai/pkg/response"
+)
+
+// SettleHandler 负责结算与订单管理的 HTTP 协议适配。
+type SettleHandler struct {
+	settleService *service.SettleService
+}
+
+// RegisterAdminSettleRoutes 注册后台结算与订单管理路由。
+func RegisterAdminSettleRoutes(r *gin.Engine, settleService *service.SettleService) {
+	h := &SettleHandler{settleService: settleService}
+	admin := r.Group("/api/admin")
+	{
+		admin.POST("/auctions/:id/settle", h.settleAuction)
+		admin.POST("/orders/:id/pay", h.payOrder)
+		admin.GET("/orders", h.listOrders)
+	}
+}
+
+// settleAuction 手动触发指定竞拍的结算。
+func (h *SettleHandler) settleAuction(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	result, err := h.settleService.SettleAuction(c.Request.Context(), id)
+	writeResult(c, result, err)
+}
+
+// payOrder 模拟支付指定订单（pending_payment → paid）。
+func (h *SettleHandler) payOrder(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	order, err := h.settleService.PayOrder(c.Request.Context(), id)
+	writeResult(c, order, err)
+}
+
+// listOrders 返回当前商家的订单列表（多租户过滤）。
+func (h *SettleHandler) listOrders(c *gin.Context) {
+	sellerID, _ := c.Get("userId")
+	orders, err := h.settleService.ListSellerOrders(c.Request.Context(), sellerID.(uint64))
+	if orders == nil {
+		response.Success(c, []struct{}{})
+		return
+	}
+	writeResult(c, orders, err)
+}

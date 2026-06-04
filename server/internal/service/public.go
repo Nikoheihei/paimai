@@ -38,6 +38,7 @@ func (e *BidRejectError) Error() string {
 // 查询能力主要读取数据库；实时出价必须依赖 Redis Lua 原子脚本。
 // 这样可以把“读详情”和“写出价”的一致性边界分开，避免所有用户端逻辑绑在一个重事务里。
 type PublicService struct {
+	settle  *SettleService // 结算服务（可选），用于出价时自动结算已过期或已成交竞拍
 	store repository.PublicStore
 	redis *redisclient.Clients
 	stream  *stream.Publisher
@@ -45,12 +46,13 @@ type PublicService struct {
 }
 
 // NewPublicService 创建用户端服务，并注入用户侧数据仓储和可选 Redis 客户端。
-func NewPublicService(store repository.PublicStore, redisClients *redisclient.Clients, publisher *stream.Publisher) *PublicService {
+func NewPublicService(store repository.PublicStore, redisClients *redisclient.Clients, publisher *stream.Publisher, settleService *SettleService) *PublicService {
 	return &PublicService{
-		store: store,
-		redis: redisClients,
-		now:   time.Now,
+		store:  store,
+		redis:  redisClients,
 		stream: publisher,
+		settle: settleService,
+		now:    time.Now,
 	}
 }
 
@@ -86,6 +88,10 @@ type RankingItem struct {
 }
 
 // GetRoom 查询直播间详情。
+func (s *PublicService) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, error) {
+	return s.store.ListLiveRooms(ctx)
+}
+
 func (s *PublicService) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
 	room, err := s.store.GetRoom(ctx, id)
 	if err != nil {
@@ -150,6 +156,16 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 	}
 	result := luaResult.toBidResult(auctionID, input.UserID)
 	if !luaResult.accepted {
+		// AUCTION_ENDED 特殊处理：竞拍在 Redis 层已过期，异步触发自动结算
+		if luaResult.code == "AUCTION_ENDED" && s.settle != nil {
+			go func(aID uint64) {
+				sCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := s.settle.SettleAuction(sCtx, aID); err != nil {
+					log.Printf("[settle] 出价触发自动结算竞拍 %d 失败: %v", aID, err)
+				}
+			}(auctionID)
+		}
 		return result, &BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
 	}
 
@@ -205,9 +221,15 @@ func (s *PublicService) persistAcceptedBid(ctx context.Context, auctionID uint64
 			log.Printf("[stream] 发布事件失败: %v", pubErr)
 		}
 	}
-	return s.store.UpdateAuctionBidState(ctx, auction)
+	updateErr := s.store.UpdateAuctionBidState(ctx, auction)
+	// 如果本次出价触发成交（sold），自动结算（必须在 UpdateAuctionBidState 之后）
+	if result.Sold && s.settle != nil && updateErr == nil {
+		if _, settleErr := s.settle.SettleAuction(ctx, auctionID); settleErr != nil {
+			log.Printf("[settle] 出价成交自动结算竞拍 %d 失败: %v", auctionID, settleErr)
+		}
+	}
+	return updateErr
 }
-
 // rankingFromRedis 从 Redis ZSET 读取排行榜热数据。
 func (s *PublicService) rankingFromRedis(ctx context.Context, auctionID uint64, limit int) ([]RankingItem, error) {
 	key := fmt.Sprintf("auction:%d:bids", auctionID)
@@ -475,4 +497,47 @@ func mustParseEndAt(value string) int64 {
 		return 0
 	}
 	return parsed.UnixMilli()
+}
+
+// ListBuyerOrders 查询当前用户的订单列表。
+func (s *PublicService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+	if buyerID == 0 {
+		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
+	}
+	return s.store.ListBuyerOrders(ctx, buyerID)
+}
+
+// GetBuyerOrder 查询当前用户的某个订单详情（校验归属）。
+func (s *PublicService) GetBuyerOrder(ctx context.Context, userID uint64, orderID uint64) (*model.Order, error) {
+	if userID == 0 {
+		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
+	}
+	order, err := s.store.GetOrder(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	// 校验订单归属，防止越权
+	if order.BuyerID != userID {
+		return nil, ErrNotFound
+	}
+	return order, nil
+}
+
+// PayBuyerOrder 模拟支付当前用户的订单。
+func (s *PublicService) PayBuyerOrder(ctx context.Context, userID uint64, orderID uint64) (*model.Order, error) {
+	if userID == 0 {
+		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
+	}
+	// 先校验归属
+	order, err := s.GetBuyerOrder(ctx, userID, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if s.settle == nil {
+		return nil, fmt.Errorf("settle service unavailable")
+	}
+	return s.settle.PayOrder(ctx, order.ID)
 }

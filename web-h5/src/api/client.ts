@@ -1,8 +1,112 @@
 /**
  * API 客户端 — 竞拍系统 REST 接口封装
+ *
+ * 所有请求自动携带 JWT token（localStorage 中读取）。
  */
 
 const BASE = '/api'
+
+// --- Token 管理 ---
+
+const TOKEN_KEY = 'paimai_token'
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
+export function isLoggedIn(): boolean {
+  return !!getToken()
+}
+
+// --- 认证 API ---
+
+export type AuthResult = {
+  userId: number
+  username: string
+  nickname: string
+  token: string
+}
+
+export type MeResult = {
+  userId: number
+  username: string
+  nickname: string
+  avatarUrl: string
+  role: string
+}
+
+export async function register(username: string, password: string, nickname?: string): Promise<AuthResult> {
+  const res = await fetch(`${BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, nickname }),
+  })
+  const body = await res.json()
+  if (body.code !== 0) throw new Error(body.message)
+  return body.data
+}
+
+export async function login(username: string, password: string): Promise<AuthResult> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  const body = await res.json()
+  if (body.code !== 0) throw new Error(body.message)
+  return body.data
+}
+
+export async function getMe(): Promise<MeResult> {
+  const res = await fetch(`${BASE}/auth/me`, {
+    headers: authHeaders(),
+  })
+  const body = await res.json()
+  if (body.code === 401) {
+    clearToken()
+    throw new Error('登录已过期，请重新登录')
+  }
+  if (body.code !== 0) throw new Error(body.message)
+  return body.data
+}
+
+// --- 通用请求工具 ---
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  if (token) {
+    return { Authorization: `Bearer ${token}` }
+  }
+  return {}
+}
+
+async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
+  const headers: Record<string, string> = {
+    ...authHeaders(),
+    ...(options.headers as Record<string, string> || {}),
+  }
+  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json'
+  }
+  const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  const body = await res.json()
+  if (body.code === 401) {
+    clearToken()
+    throw new Error('登录已过期')
+  }
+  if (body.code !== 0) throw new Error(body.message)
+  return body.data
+}
+
+// --- 业务 API ---
 
 export type Auction = {
   id: number
@@ -49,45 +153,43 @@ export type RankingItem = {
   amountCents: number
 }
 
+export type Order = {
+  id: number
+  auctionId: number
+  productId: number
+  buyerId: number
+  sellerId: number
+  finalPriceCents: number
+  status: string
+  createdAt: string
+  paidAt: string | null
+}
+
+export async function payBuyerOrder(orderId: number): Promise<any> {
+  return apiFetch(`/orders/${orderId}/pay`, { method: 'POST' })
+}
+
 export async function getRoom(roomId: number): Promise<LiveRoom> {
-  const res = await fetch(`${BASE}/rooms/${roomId}`)
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return apiFetch(`/rooms/${roomId}`)
 }
 
 export async function getRoomAuctions(roomId: number, status?: string): Promise<Auction[]> {
   const params = status ? `?status=${status}` : ''
-  const res = await fetch(`${BASE}/rooms/${roomId}/auctions${params}`)
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return apiFetch(`/rooms/${roomId}/auctions${params}`)
 }
 
 export async function getAuction(id: number): Promise<Auction> {
-  const res = await fetch(`${BASE}/auctions/${id}`)
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return apiFetch(`/auctions/${id}`)
 }
 
 export async function getRanking(auctionId: number, limit = 10): Promise<RankingItem[]> {
-  const res = await fetch(`${BASE}/auctions/${auctionId}/ranking?limit=${limit}`)
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return apiFetch(`/auctions/${auctionId}/ranking?limit=${limit}`)
 }
 
 export async function placeBid(auctionId: number, userId: number, amountCents: number, idempotencyKey: string): Promise<BidResult> {
-  const res = await fetch(`${BASE}/auctions/${auctionId}/bids`, {
+  return apiFetch(`/auctions/${auctionId}/bids`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, amountCents, idempotencyKey }),
   })
-  const body = await res.json()
-  if (body.code !== 0) {
-    if (body.code === 409) throw new Error(body.message)
-    throw new Error(body.message)
-  }
-  return body.data
 }

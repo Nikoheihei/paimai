@@ -74,6 +74,24 @@ func (s *publicStoreStub) UpdateAuctionBidState(_ context.Context, auction *mode
 }
 
 // ListAuctionBids 从内存仓储中返回指定竞拍的有效出价记录。
+func (s *publicStoreStub) ListLiveRooms(_ context.Context) ([]model.LiveRoom, error) {
+	rooms := make([]model.LiveRoom, 0, len(s.rooms))
+	for _, r := range s.rooms {
+		if r.Status == "live" {
+			rooms = append(rooms, *r)
+		}
+	}
+	return rooms, nil
+}
+
+func (s *publicStoreStub) ListBuyerOrders(_ context.Context, buyerID uint64) ([]model.Order, error) {
+	return []model.Order{}, nil
+}
+
+func (s *publicStoreStub) GetOrder(_ context.Context, id uint64) (*model.Order, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
 func (s *publicStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	bids := make([]model.Bid, 0, len(s.bids))
 	for _, bid := range s.bids {
@@ -89,7 +107,7 @@ func (s *publicStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, l
 
 // TestPublicServiceGetRoomNotFound 验证直播间不存在时转换为服务层 ErrNotFound。
 func TestPublicServiceGetRoomNotFound(t *testing.T) {
-	svc := NewPublicService(newPublicStoreStub(), nil, nil)
+	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil)
 
 	_, err := svc.GetRoom(context.Background(), 404)
 	if !errors.Is(err, ErrNotFound) {
@@ -103,7 +121,7 @@ func TestPublicServiceListRoomAuctionsFiltersStatus(t *testing.T) {
 	store.auctions[1] = &model.Auction{ID: 1, RoomID: 10, Status: "running"}
 	store.auctions[2] = &model.Auction{ID: 2, RoomID: 10, Status: "scheduled"}
 	store.auctions[3] = &model.Auction{ID: 3, RoomID: 20, Status: "running"}
-	svc := NewPublicService(store, nil, nil)
+	svc := NewPublicService(store, nil, nil, nil)
 
 	auctions, err := svc.ListRoomAuctions(context.Background(), 10, "running")
 	if err != nil {
@@ -122,7 +140,7 @@ func TestPublicServiceRankingFallsBackToDB(t *testing.T) {
 		{AuctionID: 1, UserID: 8, AmountCents: 200, Accepted: true},
 		{AuctionID: 2, UserID: 9, AmountCents: 999, Accepted: true},
 	}
-	svc := NewPublicService(store, nil, nil)
+	svc := NewPublicService(store, nil, nil, nil)
 
 	ranking, err := svc.GetRanking(context.Background(), 1, 2)
 	if err != nil {
@@ -135,7 +153,7 @@ func TestPublicServiceRankingFallsBackToDB(t *testing.T) {
 
 // TestPublicServicePlaceBidRequiresRedis 验证没有 Redis 出价引擎时不会接受实时出价。
 func TestPublicServicePlaceBidRequiresRedis(t *testing.T) {
-	svc := NewPublicService(newPublicStoreStub(), nil, nil)
+	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil)
 
 	_, err := svc.PlaceBid(context.Background(), 1, BidInput{
 		UserID:         10,

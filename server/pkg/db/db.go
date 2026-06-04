@@ -37,6 +37,7 @@ func InitDB(dsn string) (*gorm.DB, error) {
 		&model.Auction{},
 		&model.Bid{},
 		&model.Order{},
+		&model.UserAuth{},
 	)
 	if err != nil {
 		return nil, err

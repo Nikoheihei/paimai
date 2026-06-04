@@ -27,6 +27,8 @@ func RegisterAdminRoutes(r *gin.Engine, adminService *service.AdminService) {
 	{
 		admin.POST("/products", h.createProduct)
 		admin.GET("/products", h.listProducts)
+		admin.GET("/products/:id", h.getProduct)
+		admin.DELETE("/products/:id", h.deleteProduct)
 
 		admin.POST("/auctions", h.createAuction)
 		admin.GET("/auctions", h.listAuctions)
@@ -34,6 +36,8 @@ func RegisterAdminRoutes(r *gin.Engine, adminService *service.AdminService) {
 		admin.POST("/auctions/:id/publish", h.publishAuction)
 		admin.POST("/auctions/:id/start", h.startAuction)
 		admin.POST("/auctions/:id/cancel", h.cancelAuction)
+
+		admin.GET("/orders/:id", h.getOrder)
 	}
 }
 
@@ -43,17 +47,16 @@ func (h *AdminHandler) createProduct(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	product, err := h.service.CreateProduct(c.Request.Context(), input)
+	sellerID, _ := c.Get("userId")
+	product, err := h.service.CreateProduct(c.Request.Context(), sellerID.(uint64), input)
 	writeResult(c, product, err)
 }
 
 // listProducts 解析商品列表筛选参数，并返回后台商品列表。
 func (h *AdminHandler) listProducts(c *gin.Context) {
-	sellerID, ok := optionalUint64Query(c, "sellerId")
-	if !ok {
-		return
-	}
-	products, err := h.service.ListProducts(c.Request.Context(), sellerID)
+	sellerID, _ := c.Get("userId")
+	uid := sellerID.(uint64)
+	products, err := h.service.ListProducts(c.Request.Context(), &uid)
 	writeResult(c, products, err)
 }
 
@@ -117,6 +120,36 @@ func (h *AdminHandler) startAuction(c *gin.Context) {
 	}
 	auction, err := h.service.StartAuction(c.Request.Context(), id, input)
 	writeResult(c, auction, err)
+}
+
+// getProduct 查询商品详情。
+func (h *AdminHandler) getProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	product, err := h.service.GetProduct(c.Request.Context(), id)
+	writeResult(c, product, err)
+}
+
+// deleteProduct 删除商品（仅无活跃竞拍的商品可删）。
+func (h *AdminHandler) deleteProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	err := h.service.DeleteProduct(c.Request.Context(), id)
+	writeResult(c, nil, err)
+}
+
+// getOrder 查询订单详情。
+func (h *AdminHandler) getOrder(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	order, err := h.service.GetOrder(c.Request.Context(), id)
+	writeResult(c, order, err)
 }
 
 // cancelAuction 处理主播或商家的异常取消竞拍请求。
@@ -184,6 +217,8 @@ func writeResult(c *gin.Context, data interface{}, err error) {
 		response.Error(c, http.StatusServiceUnavailable, 503, "bid engine unavailable")
 	case errors.Is(err, service.ErrInvalidTransition):
 		response.Error(c, http.StatusConflict, 409, err.Error())
+	case errors.Is(err, service.ErrUnauthorized):
+		response.Error(c, http.StatusUnauthorized, 401, err.Error())
 	case errors.Is(err, service.ErrAuctionNotEditable):
 		response.Error(c, http.StatusConflict, 409, err.Error())
 	default:

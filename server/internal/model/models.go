@@ -70,6 +70,17 @@ type Bid struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
+// UserAuth 用户认证信息，与 User 表一对一关联。
+// 密码哈希永远不在 JSON 中暴露（gorm:"-" + json:"-"）。
+type UserAuth struct {
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID       uint64    `gorm:"uniqueIndex;not null" json:"userId"`
+	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string    `gorm:"size:255;not null" json:"-"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
 // Order 表示拍卖成功后生成的最终购买订单。
 type Order struct {
 	ID              uint64     `gorm:"primaryKey;autoIncrement" json:"id"`

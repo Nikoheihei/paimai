@@ -32,11 +32,17 @@ func RegisterPublicRoutes(r *gin.Engine, publicService *service.PublicService, h
 	h := &PublicHandler{service: publicService, hub: hub}
 	api := r.Group("/api")
 	{
+		api.GET("/rooms", h.listLiveRooms)
 		api.GET("/rooms/:roomId", h.getRoom)
 		api.GET("/rooms/:roomId/auctions", h.listRoomAuctions)
 		api.GET("/auctions/:id", h.getAuction)
 		api.GET("/auctions/:id/ranking", h.getRanking)
 		api.POST("/auctions/:id/bids", h.placeBid)
+
+		api.GET("/orders", h.listBuyerOrders)
+		api.GET("/orders/:id", h.getBuyerOrder)
+		api.POST("/orders/:id/pay", h.payBuyerOrder)
+
 		api.GET("/rooms/:roomId/ws", h.serveWS)
 	}
 }
@@ -49,6 +55,16 @@ func (h *PublicHandler) getRoom(c *gin.Context) {
 	}
 	room, err := h.service.GetRoom(c.Request.Context(), roomID)
 	writeResult(c, room, err)
+}
+
+// listLiveRooms 返回所有直播中的直播间列表（平台首页）。
+func (h *PublicHandler) listLiveRooms(c *gin.Context) {
+	rooms, err := h.service.ListLiveRooms(c.Request.Context())
+	if rooms == nil {
+		response.Success(c, []struct{}{})
+		return
+	}
+	writeResult(c, rooms, err)
 }
 
 // listRoomAuctions 查询直播间竞拍列表，可通过 status 查询参数过滤。
@@ -103,6 +119,39 @@ func (h *PublicHandler) placeBid(c *gin.Context) {
 	writeResult(c, result, err)
 }
 
+// listBuyerOrders 返回当前用户的订单列表。
+func (h *PublicHandler) listBuyerOrders(c *gin.Context) {
+	userID, _ := c.Get("userId")
+	orders, err := h.service.ListBuyerOrders(c.Request.Context(), userID.(uint64))
+	if orders == nil {
+		response.Success(c, []struct{}{})
+		return
+	}
+	writeResult(c, orders, err)
+}
+
+// getBuyerOrder 返回当前用户的订单详情。
+func (h *PublicHandler) getBuyerOrder(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	userID, _ := c.Get("userId")
+	order, err := h.service.GetBuyerOrder(c.Request.Context(), userID.(uint64), id)
+	writeResult(c, order, err)
+}
+
+// payBuyerOrder 模拟支付当前用户的订单。
+func (h *PublicHandler) payBuyerOrder(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	userID, _ := c.Get("userId")
+	order, err := h.service.PayBuyerOrder(c.Request.Context(), userID.(uint64), id)
+	writeResult(c, order, err)
+}
+
 // serveWS 处理 WebSocket 升级请求，验证房间存在后将连接注册到 Hub。
 func (h *PublicHandler) serveWS(c *gin.Context) {
 	roomID, ok := positiveParam(c, "roomId")
@@ -117,21 +166,26 @@ func (h *PublicHandler) serveWS(c *gin.Context) {
 	// 	return
 	// }
 
-	// 从查询参数中获取 userId（生产环境应由 JWT 认证提供）
-	userIDStr := c.DefaultQuery("userId", "0")
-	userID, err := strconv.ParseUint(userIDStr, 10, 64)
-	if err != nil || userID == 0 {
-		response.Error(c, http.StatusBadRequest, 400, "userId query parameter is required and must be a positive integer")
-		return
+	// 优先从 JWT context 获取 userId，兼容开发阶段仍然传 query 参数
+	userID, _ := c.Get("userId")
+	if userID == nil || userID.(uint64) == 0 {
+		userIDStr := c.DefaultQuery("userId", "0")
+		uid, err := strconv.ParseUint(userIDStr, 10, 64)
+		if err != nil || uid == 0 {
+			response.Error(c, http.StatusBadRequest, 400, "userId is required")
+			return
+		}
+		userID = uid
 	}
 
+	uid := userID.(uint64)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[websocket] upgrade failed for room %d, user %d: %v", roomID, userID, err)
+		log.Printf("[websocket] upgrade failed for room %d, user %d: %v", roomID, uid, err)
 		return
 	}
 
-	client := ws.NewClient(h.hub, roomID, userID, conn)
+	client := ws.NewClient(h.hub, roomID, uid, conn)
 	h.hub.Register(client)
 
 	go client.WritePump()

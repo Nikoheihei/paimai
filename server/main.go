@@ -58,7 +58,7 @@ func main() {
 	// 使用 CORS 中间件
 	r.Use(middleware.CORS())
 
-	// 基础路由
+	// 基础路由（无需鉴权）
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
@@ -67,12 +67,36 @@ func main() {
 
 	if database != nil {
 		adminStore := repository.NewGormAdminStore(database)
-		adminService := service.NewAdminService(adminStore, redisClients)
-		handler.RegisterAdminRoutes(r, adminService)
 
+		// 认证服务（注册/登录无需鉴权，在全局中间件前注册）
+		authStore := repository.NewGormAuthStore(database)
+		authService := service.NewAuthService(authStore)
+		handler.RegisterAuthRoutes(r, authService)
+
+		// 管理端服务（初始化，路由在中间件后注册）
+		adminService := service.NewAdminService(adminStore, redisClients)
+		settleService := service.NewSettleService(adminStore)
+		roomService := service.NewRoomService(adminStore, settleService)
+
+		// 所有 API 路由挂载鉴权中间件（认证路由和 ping 已在前面注册）
+		r.Use(middleware.AuthRequired())
+
+		// 以下路由都需要鉴权
+		handler.RegisterAdminRoutes(r, adminService)
+		handler.RegisterAdminSettleRoutes(r, settleService)
+		handler.RegisterRoomRoutes(r, roomService)
+
+		handler.RegisterAuthMeRoute(r, authService)
+
+		// 用户端服务（出价、排行榜、直播间）
 		publicStore := repository.NewGormPublicStore(database)
-		publicService := service.NewPublicService(publicStore, redisClients, streamPublisher)
+		publicService := service.NewPublicService(publicStore, redisClients, streamPublisher, settleService)
 		handler.RegisterPublicRoutes(r, publicService, hub)
+
+		// 启动时结算已过期的 running 竞拍
+		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
+			log.Printf("启动时结算了 %d 个过期竞拍", count)
+		}
 	}
 
 	// 6. 启动服务

@@ -26,6 +26,7 @@ var (
 	ErrNotFound           = errors.New("not found")
 	ErrInvalidTransition  = errors.New("invalid auction transition")
 	ErrAuctionNotEditable = errors.New("auction is not editable")
+	ErrUnauthorized       = errors.New("unauthorized")
 )
 
 // AdminService 聚合后台管理侧的业务能力。
@@ -102,14 +103,14 @@ type CancelAuctionInput struct {
 }
 
 // CreateProduct 校验商品创建输入，并委托 repository 写入商品数据。
-func (s *AdminService) CreateProduct(ctx context.Context, input ProductInput) (*model.Product, error) {
+func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input ProductInput) (*model.Product, error) {
 	input.Name = strings.TrimSpace(input.Name)
-	if input.SellerID == 0 || input.Name == "" {
-		return nil, fmt.Errorf("%w: sellerId and name are required", ErrInvalidInput)
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: product name is required", ErrInvalidInput)
 	}
 
 	product := &model.Product{
-		SellerID:    input.SellerID,
+		SellerID:    sellerID,
 		Name:        input.Name,
 		ImageURL:    strings.TrimSpace(input.ImageURL),
 		Description: strings.TrimSpace(input.Description),
@@ -438,4 +439,41 @@ func normalizedMode(mode string) string {
 		return AuctionModeSuddenDeath
 	}
 	return mode
+}
+
+// GetProduct 查询商品详情。
+func (s *AdminService) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
+	return s.store.GetProduct(ctx, id)
+}
+
+// DeleteProduct 删除商品。有关联活跃竞拍（draft/scheduled/running）时拒绝。
+func (s *AdminService) DeleteProduct(ctx context.Context, id uint64) error {
+	// 查询该商品的所有竞拍
+	auctions, err := s.store.ListAuctions(ctx, repository.AuctionFilter{})
+	if err != nil {
+		return err
+	}
+	for _, a := range auctions {
+		if a.ProductID == id && (a.Status == "draft" || a.Status == "scheduled" || a.Status == "running") {
+			return fmt.Errorf("%w: product has active auctions", ErrInvalidInput)
+		}
+	}
+	return s.store.DeleteProduct(ctx, id)
+}
+
+// GetOrder 查询订单详情。
+func (s *AdminService) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	order, err := s.store.GetOrder(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return order, nil
+}
+
+// ListOrdersBySeller 查询商家所有订单。
+func (s *AdminService) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
+	return s.store.ListOrdersBySeller(ctx, sellerID)
 }

@@ -15,17 +15,25 @@ import (
 type adminStoreStub struct {
 	products      map[uint64]*model.Product
 	auctions      map[uint64]*model.Auction
+	orders        map[uint64]*model.Order
+	rooms         map[uint64]*model.LiveRoom
 	nextProductID uint64
 	nextAuctionID uint64
+	nextOrderID   uint64
+	nextRoomID    uint64
 }
 
 // newAdminStoreStub 创建内存版后台数据仓储，供服务层单元测试隔离数据库使用。
 func newAdminStoreStub() *adminStoreStub {
 	return &adminStoreStub{
 		products:      make(map[uint64]*model.Product),
-		auctions:      make(map[uint64]*model.Auction),
+	auctions:      make(map[uint64]*model.Auction),
+		orders:        make(map[uint64]*model.Order),
+		rooms:         make(map[uint64]*model.LiveRoom),
 		nextProductID: 1,
 		nextAuctionID: 1,
+		nextOrderID:   1,
+		nextRoomID:    1,
 	}
 }
 
@@ -100,6 +108,103 @@ func (s *adminStoreStub) ListAuctions(_ context.Context, filter repository.Aucti
 	return auctions, nil
 }
 
+// CreateOrder 在内存仓储中保存订单，并模拟自增 ID。
+func (s *adminStoreStub) CreateOrder(_ context.Context, order *model.Order) error {
+	order.ID = s.nextOrderID
+	s.nextOrderID++
+	cp := *order
+	s.orders[order.ID] = &cp
+	return nil
+}
+
+// GetOrder 从内存仓储中按 ID 查询订单。
+func (s *adminStoreStub) GetOrder(_ context.Context, id uint64) (*model.Order, error) {
+	order, ok := s.orders[id]
+	if !ok {
+		return nil, gorm.ErrRecordNotFound
+	}
+	cp := *order
+	return &cp, nil
+}
+
+// GetOrderByAuction 从内存仓储中按竞拍 ID 查询关联订单。
+func (s *adminStoreStub) GetOrderByAuction(_ context.Context, auctionID uint64) (*model.Order, error) {
+	for _, order := range s.orders {
+		if order.AuctionID == auctionID {
+			cp := *order
+			return &cp, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+// UpdateOrder 在内存仓储中覆盖保存订单最新状态。
+func (s *adminStoreStub) UpdateOrder(_ context.Context, order *model.Order) error {
+	cp := *order
+	s.orders[order.ID] = &cp
+	return nil
+}
+
+// ListOrders 从内存仓储中返回所有订单列表。
+func (s *adminStoreStub) ListOrders(_ context.Context) ([]model.Order, error) {
+	orders := make([]model.Order, 0, len(s.orders))
+	for _, order := range s.orders {
+		orders = append(orders, *order)
+	}
+	return orders, nil
+}
+
+// ListRunningExpiredAuctions 从内存仓储中查询所有 running 但已过期的竞拍。
+func (s *adminStoreStub) DeleteProduct(_ context.Context, id uint64) error {
+	delete(s.products, id)
+	return nil
+}
+
+func (s *adminStoreStub) CreateRoom(_ context.Context, room *model.LiveRoom) error {
+	room.ID = s.nextRoomID
+	s.nextRoomID++
+	cp := *room
+	s.rooms[room.ID] = &cp
+	return nil
+}
+
+func (s *adminStoreStub) GetRoom(_ context.Context, id uint64) (*model.LiveRoom, error) {
+	room, ok := s.rooms[id]
+	if !ok {
+		return nil, gorm.ErrRecordNotFound
+	}
+	cp := *room
+	return &cp, nil
+}
+
+func (s *adminStoreStub) UpdateRoom(_ context.Context, room *model.LiveRoom) error {
+	return nil
+}
+
+func (s *adminStoreStub) ListRoomsBySeller(_ context.Context, sellerID uint64) ([]model.LiveRoom, error) {
+	return []model.LiveRoom{}, nil
+}
+
+func (s *adminStoreStub) ListOrdersBySeller(_ context.Context, sellerID uint64) ([]model.Order, error) {
+	orders := make([]model.Order, 0)
+	for _, order := range s.orders {
+		if order.SellerID == sellerID {
+			orders = append(orders, *order)
+		}
+	}
+	return orders, nil
+}
+
+func (s *adminStoreStub) ListRunningExpiredAuctions(_ context.Context) ([]model.Auction, error) {
+	auctions := make([]model.Auction, 0)
+	for _, auction := range s.auctions {
+		if auction.Status == "running" && auction.EndAt.Before(time.Now()) {
+			auctions = append(auctions, *auction)
+		}
+	}
+	return auctions, nil
+}
+
 // TestAdminServiceAuctionLifecycle 验证竞拍从创建、发布到启动的核心生命周期。
 func TestAdminServiceAuctionLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -108,7 +213,7 @@ func TestAdminServiceAuctionLifecycle(t *testing.T) {
 	fixedNow := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixedNow }
 
-	product, err := svc.CreateProduct(ctx, ProductInput{
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{
 		SellerID: 1,
 		Name:     "翡翠手镯",
 	})
@@ -160,7 +265,7 @@ func TestAdminServiceRejectsInvalidReserveAuction(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "限量球鞋"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "限量球鞋"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -183,7 +288,7 @@ func TestAdminServiceUpdatesDraftAuctionRules(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "老茶饼"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "老茶饼"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -225,7 +330,7 @@ func TestAdminServiceCancelLifecycle(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "孤品珠宝"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "孤品珠宝"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -262,7 +367,7 @@ func TestAdminServiceRejectsInvalidExtensionAuction(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "二手名表"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "二手名表"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -285,7 +390,7 @@ func TestAdminServiceRejectsUnsupportedAuctionMode(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "测试商品"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "测试商品"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -308,7 +413,7 @@ func TestAdminServiceListFilters(t *testing.T) {
 	store := newAdminStoreStub()
 	svc := NewAdminService(store, nil)
 
-	product, err := svc.CreateProduct(ctx, ProductInput{SellerID: 1, Name: "测试商品"})
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "测试商品"})
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
@@ -356,7 +461,7 @@ func TestAdminServiceListFilters(t *testing.T) {
 func TestAdminServiceRejectsInvalidProductInput(t *testing.T) {
 	svc := NewAdminService(newAdminStoreStub(), nil)
 
-	_, err := svc.CreateProduct(context.Background(), ProductInput{
+	_, err := svc.CreateProduct(context.Background(), 1, ProductInput{
 		SellerID: 1,
 		Name:     "   ",
 	})

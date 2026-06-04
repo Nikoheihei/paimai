@@ -13,20 +13,23 @@ var jwtSecret = []byte("paimai_secret_key_123456")
 // Claims 定义了 JWT 载荷部分的内容。
 type Claims struct {
 	UserID   uint64 `json:"userId"`
+	Username string `json:"username"` // 新增 username，用于日志和身份标识
 	Nickname string `json:"nickname"`
 	Role     string `json:"role"` // "buyer" (买家), "seller" (卖家), "anchor" (主播)
 	jwt.RegisteredClaims
 }
 
 // GenerateToken 根据用户基础信息生成带过期时间的 JWT 字符串。
-func GenerateToken(userID uint64, role string, nickname string) (string, error) {
+// 有效期 7 天，适配拍卖场景中用户可能长时间在线。
+func GenerateToken(userID uint64, username, role, nickname string) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UserID:   userID,
+		Username: username,
 		Nickname: nickname,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)), // Token 有效期 24 小时
+			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)), // 7 天
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    "paimai_auth",

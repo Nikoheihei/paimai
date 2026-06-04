@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"time"
 	"context"
 
 	"gorm.io/gorm"
@@ -25,11 +26,25 @@ type AdminStore interface {
 	CreateProduct(ctx context.Context, product *model.Product) error
 	ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error)
 	GetProduct(ctx context.Context, id uint64) (*model.Product, error)
+	DeleteProduct(ctx context.Context, id uint64) error
 
 	CreateAuction(ctx context.Context, auction *model.Auction) error
 	GetAuction(ctx context.Context, id uint64) (*model.Auction, error)
 	UpdateAuction(ctx context.Context, auction *model.Auction) error
 	ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error)
+
+	CreateRoom(ctx context.Context, room *model.LiveRoom) error
+	GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error)
+	UpdateRoom(ctx context.Context, room *model.LiveRoom) error
+	ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error)
+
+	CreateOrder(ctx context.Context, order *model.Order) error
+	GetOrder(ctx context.Context, id uint64) (*model.Order, error)
+	GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error)
+	UpdateOrder(ctx context.Context, order *model.Order) error
+	ListOrders(ctx context.Context) ([]model.Order, error)
+	ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error)
+	ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error)
 }
 
 // GormAdminStore 是基于 GORM 的 AdminStore 实现。
@@ -99,6 +114,91 @@ func (s *GormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter)
 		query = query.Where("status = ?", filter.Status)
 	}
 	if err := query.Find(&auctions).Error; err != nil {
+		return nil, err
+	}
+	return auctions, nil
+}
+
+// CreateOrder 创建订单记录。
+func (s *GormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {
+	return s.db.WithContext(ctx).Create(order).Error
+}
+
+// GetOrder 按订单 ID 查询订单。
+func (s *GormAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	var order model.Order
+	if err := s.db.WithContext(ctx).First(&order, id).Error; err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+// GetOrderByAuction 按竞拍 ID 查询关联订单（唯一索引）。
+func (s *GormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) {
+	var order model.Order
+	if err := s.db.WithContext(ctx).Where("auction_id = ?", auctionID).First(&order).Error; err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+// UpdateOrder 更新订单状态（如 pending_payment → paid）。
+func (s *GormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error {
+	return s.db.WithContext(ctx).Save(order).Error
+}
+
+// ListOrders 返回所有订单，按创建时间倒序。
+func (s *GormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) {
+	var orders []model.Order
+	if err := s.db.WithContext(ctx).Order("id DESC").Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+// ListRunningExpiredAuctions 查询所有 running 但已过期的竞拍（用于启动时结算）。
+func (s *GormAdminStore) DeleteProduct(ctx context.Context, id uint64) error {
+	return s.db.WithContext(ctx).Delete(&model.Product{}, id).Error
+}
+
+func (s *GormAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error {
+	return s.db.WithContext(ctx).Create(room).Error
+}
+
+func (s *GormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
+	var room model.LiveRoom
+	if err := s.db.WithContext(ctx).First(&room, id).Error; err != nil {
+		return nil, err
+	}
+	return &room, nil
+}
+
+func (s *GormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error {
+	return s.db.WithContext(ctx).Save(room).Error
+}
+
+func (s *GormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
+	var rooms []model.LiveRoom
+	if err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&rooms).Error; err != nil {
+		return nil, err
+	}
+	return rooms, nil
+}
+
+func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
+	var orders []model.Order
+	if err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+func (s *GormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
+	var auctions []model.Auction
+	if err := s.db.WithContext(ctx).
+		Where("status = ? AND end_at <= ?", "running", time.Now()).
+		Order("id ASC").
+		Find(&auctions).Error; err != nil {
 		return nil, err
 	}
 	return auctions, nil

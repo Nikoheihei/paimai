@@ -13,12 +13,15 @@ import (
 // 用户侧查询和后台管理使用独立接口，避免为了复用而把所有方法塞进同一个 Store。
 // 这样后续用户端读模型、后台写模型分开优化时，服务层依赖也更清晰。
 type PublicStore interface {
+	ListLiveRooms(ctx context.Context) ([]model.LiveRoom, error)
 	GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error)
 	GetAuction(ctx context.Context, id uint64) (*model.Auction, error)
 	ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]model.Auction, error)
 	CreateBid(ctx context.Context, bid *model.Bid) error
 	UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error
 	ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error)
+	ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error)
+	GetOrder(ctx context.Context, id uint64) (*model.Order, error)
 }
 
 // GormPublicStore 是基于 GORM 的用户侧数据访问实现。
@@ -32,6 +35,14 @@ func NewGormPublicStore(db *gorm.DB) *GormPublicStore {
 }
 
 // GetRoom 根据直播间 ID 查询直播间信息。
+func (s *GormPublicStore) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, error) {
+	var rooms []model.LiveRoom
+	if err := s.db.WithContext(ctx).Where("status = ?", "live").Order("id DESC").Find(&rooms).Error; err != nil {
+		return nil, err
+	}
+	return rooms, nil
+}
+
 func (s *GormPublicStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
 	var room model.LiveRoom
 	if err := s.db.WithContext(ctx).First(&room, id).Error; err != nil {
@@ -82,6 +93,22 @@ func (s *GormPublicStore) UpdateAuctionBidState(ctx context.Context, auction *mo
 }
 
 // ListAuctionBids 按金额倒序查询竞拍出价记录，用于数据库兜底排行榜。
+func (s *GormPublicStore) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+	var orders []model.Order
+	if err := s.db.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+func (s *GormPublicStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	var order model.Order
+	if err := s.db.WithContext(ctx).First(&order, id).Error; err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
 func (s *GormPublicStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	var bids []model.Bid
 	query := s.db.WithContext(ctx).

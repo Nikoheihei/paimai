@@ -123,6 +123,51 @@ useWebSocket(roomId, userId) → 连接 WS
 - `api/client.ts` 的 `placeBid` 可用 MSW 或 mock fetch 测试
 - 倒计时逻辑可拆成独立的 `useCountdown` hook 并单测
 
+## 三、建议人工 Code Review 的重点
+
+### 🔴 高优先级（请务必审查）
+
+1. **WebSocket 断线重连的竞态条件**
+   - 文件：`web-h5/src/hooks/useWebSocket.ts`
+   - 重连成功后，当前竞拍状态（价格、排行榜、倒计时）需要从 REST API 重新拉取，而不是仅依赖 WS 推送
+   - **请确认重连后状态恢复逻辑没有遗漏**：如果重连期间有出价，拉取 API 后应判断是否需要同步更新 UI
+
+2. **价格显示的精度处理**
+   - 文件：`web-h5/src/pages/RoomPage.tsx` 及 `AuctionPanel.tsx`
+   - 后端价格以「分」为单位传递（`currentPriceCents: 500`），前端 `/ 100` 展示
+   - **检查前端所有价格展示点是否统一做了除以 100**，避免出现 `500.00 元` 这样的显示
+
+### 🟡 中等优先级
+
+3. **useWebSocket hook 的清理时机**
+   - 组件卸载时是否确保 `ws.close()` 被调用，避免内存泄漏
+   - 如果房间切得太快（用户快速切换直播间），旧 WS 连接可能还在等待重连中未清理
+
+4. **倒计时精度**
+   - 当前倒计时基于 `endAt` 与本地时间之差，如果用户本地时间不准会有偏差
+   - **建议后续增加服务端时间校准（NTP sync）**，当前可接受
+
+### 🟢 低优先级
+
+5. **错误提示的用户体验**
+   - 出价失败（如竞拍已结束、频率限制）目前为弹窗或 console 输出
+   - 建议后续统一为底部 toast 组件
+
+---
+
+## 四、与规则库的对账
+
+| 规则 ID | 状态 | 备注 |
+|---|---|---|
+| `h5-connect-ws` | ✅ 已覆盖 | 页面加载自动建立 WS 连接 |
+| `h5-price-display` | ✅ 已覆盖 | 分转元展示 |
+| `h5-reconnect` | ✅ 已覆盖 | 自动重连 + 指数退避 |
+| `h5-countdown` | ✅ 已覆盖 | 倒计时组件 |
+| `h5-bid-button` | ✅ 已覆盖 | 快捷出价 + 自定义金额 |
+| `h5-ranking-list` | ✅ 已覆盖 | Top10 排行榜 |
+| `h5-error-toast` | ⏳ 待覆盖 | 当前仅 console 输出 |
+
+
 ---
 
 ## 七、产线良率

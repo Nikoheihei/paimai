@@ -1074,3 +1074,32 @@ gantt
 5. 最后做压测、文档和演示材料。
 
 这套顺序能优先保证评分权重最高的工程完整度和技术深度，同时留出时间打磨竞拍氛围与 AI 使用材料。
+
+---
+
+## 11. 产线状态追踪
+
+表中 #1-#4 为 6/2 日内完成，#101-#104 为 6/3 日完成，编号沿用产线报告文件编号。
+
+### ✅ 已完成闭环
+
+| # | 产线名称 | 报告 | 说明 |
+|---|---|---|---|
+| 1 | `bid-closed-loop` | `001-bid-interval-rule.md` | 出价频率限制 + Lua 脚本原子校验 |
+| 2 | `websocket-push` | `002-websocket-push.md` | Redis Stream → WS 实时推送出价事件 |
+| 3 | `h5-bidding-ui` | `003-h5-bidding-ui.md` | H5 前端竞拍直播间交互 |
+| 4 | `settle-order-pipeline` | `004-settle-order-pipeline.md` | 结算与订单 — 竞拍结束自动结算/生成订单/支付 |
+| 101 | `user-auth` | `101-user-auth.md` | JWT 注册/登录/全局鉴权中间件 |
+| 102 | `admin-panel` | `102-admin-panel.md` | 多商家管理后台 — 商品/竞拍/直播间/订单管理 |
+| 103 | `buyer-orders` | `103-buyer-orders.md` | 买家 H5 订单列表 + 详情 + 模拟支付 |
+| 104 | `deployment` | `104-deployment.md` | Docker Compose 部署 + 初始化脚本 + README |
+
+### ⏳ 待启动闭环
+
+| # | 产线名称 | 优先级 | 说明 |
+|---|---|---|---|
+| 201 | 集成测试套件 | P1 | 基于 Docker Compose 的端到端集成测试（出价→WS→结算→订单全链路） |
+| 202 | 氛围动画与体验打磨 | P2 | Framer Motion 动效（出价领先/被超越/延时飘字/成交撒花）、紧张感倒计时、重连恢复 |
+| 203 | 高可用 & 压测 | P2 | k6/Artillery 压测脚本、并发场景下出价一致性验证、压测报告 |
+| 204 | 订单售后流程 | P3 | 退款、取消订单、申诉 |
+| 205 | JWT 统一鉴权到 WebSocket | P3 | WS 连接改用 JWT token 认证，替换 query 参数 userId |
