@@ -13,7 +13,7 @@ type SettleHandler struct {
 }
 
 // RegisterAdminSettleRoutes 注册后台结算与订单管理路由。
-func RegisterAdminSettleRoutes(r *gin.Engine, settleService *service.SettleService) {
+func RegisterAdminSettleRoutes(r gin.IRouter, settleService *service.SettleService) {
 	h := &SettleHandler{settleService: settleService}
 	admin := r.Group("/api/admin")
 	{
@@ -45,8 +45,7 @@ func (h *SettleHandler) payOrder(c *gin.Context) {
 
 // listOrders 返回当前商家的订单列表（多租户过滤）。
 func (h *SettleHandler) listOrders(c *gin.Context) {
-	sellerID, _ := c.Get("userId")
-	orders, err := h.settleService.ListSellerOrders(c.Request.Context(), sellerID.(uint64))
+	orders, err := h.settleService.ListSellerOrders(c.Request.Context(), mustGetUserID(c))
 	if orders == nil {
 		response.Success(c, []struct{}{})
 		return

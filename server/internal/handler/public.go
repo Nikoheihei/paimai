@@ -121,8 +121,7 @@ func (h *PublicHandler) placeBid(c *gin.Context) {
 
 // listBuyerOrders 返回当前用户的订单列表。
 func (h *PublicHandler) listBuyerOrders(c *gin.Context) {
-	userID, _ := c.Get("userId")
-	orders, err := h.service.ListBuyerOrders(c.Request.Context(), userID.(uint64))
+	orders, err := h.service.ListBuyerOrders(c.Request.Context(), mustGetUserID(c))
 	if orders == nil {
 		response.Success(c, []struct{}{})
 		return
@@ -136,7 +135,7 @@ func (h *PublicHandler) getBuyerOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.service.GetBuyerOrder(c.Request.Context(), id)
+	order, err := h.service.GetBuyerOrder(c.Request.Context(), id, mustGetUserID(c))
 	writeResult(c, order, err)
 }
 
@@ -146,7 +145,7 @@ func (h *PublicHandler) payBuyerOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.service.PayBuyerOrder(c.Request.Context(), id)
+	order, err := h.service.PayBuyerOrder(c.Request.Context(), id, mustGetUserID(c))
 	writeResult(c, order, err)
 }
 

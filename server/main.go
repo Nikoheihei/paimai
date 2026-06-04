@@ -49,7 +49,9 @@ func main() {
 	if redisClients != nil && redisClients.Master != nil {
 		streamPublisher = stream.NewPublisher(redisClients.Master)
 		streamConsumer := stream.NewConsumer(redisClients.Master, hub)
-		go streamConsumer.Start(context.Background())
+		streamCtx, streamCancel := context.WithCancel(context.Background())
+		defer streamCancel()
+		go streamConsumer.Start(streamCtx)
 	}
 
 	// 5. 初始化 Gin 路由
@@ -88,16 +90,19 @@ func main() {
 		r.Use(middleware.AuthRequired())
 
 		// 以下路由都需要鉴权
-		handler.RegisterAdminRoutes(r, adminService)
-		handler.RegisterAdminSettleRoutes(r, settleService)
-		handler.RegisterRoomRoutes(r, roomService)
+		// admin 路由额外校验角色
+		adminGroup := r.Group("/api/admin")
+		adminGroup.Use(middleware.AdminRequired())
+		handler.RegisterAdminRoutes(adminGroup, adminService)
+		handler.RegisterAdminSettleRoutes(adminGroup, settleService)
+		handler.RegisterRoomRoutes(adminGroup, roomService)
 
 		handler.RegisterAuthMeRoute(r, authService)
 
 		// 用户端服务（出价、排行榜、直播间）
 		publicStore := repository.NewGormPublicStore(database)
 		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
-				upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: true}
+		upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: cfg.AllowAllWebSocketOrigins}
 		handler.RegisterPublicRoutes(r, publicService, hub, upgraderCfg)
 
 		// 启动时结算已过期的 running 竞拍

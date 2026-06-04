@@ -621,20 +621,35 @@ func (s *PublicService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]
 }
 
 // GetBuyerOrder 查询买家单个订单详情。
-func (s *PublicService) GetBuyerOrder(ctx context.Context, id uint64) (*model.Order, error) {
+func (s *PublicService) GetBuyerOrder(ctx context.Context, id uint64, userID uint64) (*model.Order, error) {
 	if id == 0 {
 		return nil, fmt.Errorf("%w: orderId is required", ErrInvalidInput)
 	}
-	return s.store.GetOrder(ctx, id)
+	order, err := s.store.GetOrder(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if order.BuyerID != userID {
+		return nil, fmt.Errorf("%w: order does not belong to user", ErrNotFound)
+	}
+	return order, nil
 }
 
 // PayBuyerOrder 买家模拟支付订单。
-func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64) (*model.Order, error) {
+func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64, userID uint64) (*model.Order, error) {
 	if orderID == 0 {
 		return nil, fmt.Errorf("%w: orderId is required", ErrInvalidInput)
 	}
 	if s.settle == nil {
 		return nil, errors.New("settle service unavailable")
+	}
+	// 校验订单归属
+	order, err := s.store.GetOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if order.BuyerID != userID {
+		return nil, fmt.Errorf("%w: order does not belong to user", ErrNotFound)
 	}
 	return s.settle.PayOrder(ctx, orderID)
 }

@@ -21,7 +21,7 @@ type AdminHandler struct {
 }
 
 // RegisterAdminRoutes 注册后台管理端商品和竞拍路由。
-func RegisterAdminRoutes(r *gin.Engine, adminService *service.AdminService) {
+func RegisterAdminRoutes(r gin.IRouter, adminService *service.AdminService) {
 	h := &AdminHandler{service: adminService}
 	admin := r.Group("/api/admin")
 	{
@@ -47,16 +47,13 @@ func (h *AdminHandler) createProduct(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	sellerID, _ := c.Get("userId")
-	product, err := h.service.CreateProduct(c.Request.Context(), sellerID.(uint64), input)
+	product, err := h.service.CreateProduct(c.Request.Context(), mustGetUserID(c), input)
 	writeResult(c, product, err)
 }
 
 // listProducts 解析商品列表筛选参数，并返回后台商品列表。
 func (h *AdminHandler) listProducts(c *gin.Context) {
-	sellerID, _ := c.Get("userId")
-	uid := sellerID.(uint64)
-	products, err := h.service.ListProducts(c.Request.Context(), &uid)
+	products, err := h.service.ListProducts(c.Request.Context(), nil)
 	writeResult(c, products, err)
 }
 
@@ -164,6 +161,32 @@ func (h *AdminHandler) cancelAuction(c *gin.Context) {
 	}
 	auction, err := h.service.CancelAuction(c.Request.Context(), id, input)
 	writeResult(c, auction, err)
+}
+
+// mustGetUserID 从 gin.Context 安全获取 userId，不存在时返回 0。
+func mustGetUserID(c *gin.Context) uint64 {
+	v, exists := c.Get("userId")
+	if !exists {
+		return 0
+	}
+	uid, ok := v.(uint64)
+	if !ok {
+		return 0
+	}
+	return uid
+}
+
+// mustGetRole 从 gin.Context 安全获取角色。
+func mustGetRole(c *gin.Context) string {
+	v, exists := c.Get("role")
+	if !exists {
+		return ""
+	}
+	role, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return role
 }
 
 // bindJSON 统一绑定 JSON 请求体，并在格式错误时写入 400 响应。

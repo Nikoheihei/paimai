@@ -59,6 +59,87 @@ func TestAuthRequiredExpiredToken(t *testing.T) {
 	}
 }
 
+// TestAdminRequiredNoRole 验证无 role 时返回 403。
+func TestAdminRequiredNoRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(AdminRequired())
+	r.GET("/admin", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Code)
+	}
+}
+
+// TestAdminRequiredBuyerRole 验证 buyer 角色返回 403。
+func TestAdminRequiredBuyerRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "buyer")
+		c.Next()
+	}, AdminRequired())
+	r.GET("/admin", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for buyer, got %d", w.Code)
+	}
+}
+
+// TestAdminRequiredSellerRole 验证 seller 角色通过。
+func TestAdminRequiredSellerRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "seller")
+		c.Next()
+	}, AdminRequired())
+	r.GET("/admin", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for seller, got %d", w.Code)
+	}
+}
+
+// TestAdminRequiredAnchorRole 验证 anchor 角色通过。
+func TestAdminRequiredAnchorRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "anchor")
+		c.Next()
+	}, AdminRequired())
+	r.GET("/admin", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for anchor, got %d", w.Code)
+	}
+}
+
 // performRequest 创建 Gin 引擎并发送带可选 token 的请求。
 func performRequest(token *string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)

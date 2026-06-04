@@ -12,7 +12,7 @@ type RoomHandler struct {
 }
 
 // RegisterRoomRoutes 注册直播间管理路由（需鉴权）。
-func RegisterRoomRoutes(r *gin.Engine, roomService *service.RoomService) {
+func RegisterRoomRoutes(r gin.IRouter, roomService *service.RoomService) {
 	h := &RoomHandler{roomService: roomService}
 	admin := r.Group("/api/admin")
 	{
@@ -30,14 +30,12 @@ func (h *RoomHandler) createRoom(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	sellerID, _ := c.Get("userId")
-	result, err := h.roomService.CreateRoom(c.Request.Context(), sellerID.(uint64), input)
+	result, err := h.roomService.CreateRoom(c.Request.Context(), mustGetUserID(c), input)
 	writeResult(c, result, err)
 }
 
 func (h *RoomHandler) listRooms(c *gin.Context) {
-	sellerID, _ := c.Get("userId")
-	rooms, err := h.roomService.ListRooms(c.Request.Context(), sellerID.(uint64))
+	rooms, err := h.roomService.ListRooms(c.Request.Context(), mustGetUserID(c))
 	writeResult(c, rooms, err)
 }
 
