@@ -121,7 +121,7 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*AuthR
 		return nil, err
 	}
 
-	token, err := jwtpkg.GenerateToken(user.ID, input.Username, user.Role, nickname)
+	token, err := jwtpkg.GenerateToken(user.ID, input.Username, user.Role, nickname, s.now())
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*AuthResult,
 		return nil, err
 	}
 
-	token, err := jwtpkg.GenerateToken(user.ID, userAuth.Username, user.Role, user.Nickname)
+	token, err := jwtpkg.GenerateToken(user.ID, userAuth.Username, user.Role, user.Nickname, s.now())
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +205,9 @@ func validateRegisterInput(input RegisterInput) error {
 	}
 	if !hasLetter.MatchString(input.Password) || !hasDigit.MatchString(input.Password) {
 		return fmt.Errorf("%w: password must contain at least one letter and one digit", ErrInvalidInput)
+	}
+	if len(input.Nickname) > 64 {
+		return fmt.Errorf("%w: nickname must be at most 64 characters", ErrInvalidInput)
 	}
 	return nil
 }

@@ -3,7 +3,9 @@ package handler
 import (
 	"github.com/gin-gonic/gin"
 
+	"net/http"
 	"paimai/internal/service"
+	"paimai/pkg/response"
 )
 
 // AuthHandler 负责用户认证的 HTTP 协议适配。
@@ -49,7 +51,16 @@ func (h *AuthHandler) login(c *gin.Context) {
 
 // me 返回当前登录用户的信息。
 func (h *AuthHandler) me(c *gin.Context) {
-	userID, _ := c.Get("userId")
-	result, err := h.authService.Me(c.Request.Context(), userID.(uint64))
+	userID, exists := c.Get("userId")
+	if !exists {
+		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
+		return
+	}
+	uid, ok := userID.(uint64)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 401, "invalid user identity")
+		return
+	}
+	result, err := h.authService.Me(c.Request.Context(), uid)
 	writeResult(c, result, err)
 }

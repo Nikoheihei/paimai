@@ -51,6 +51,7 @@ services:
       MYSQL_DSN: "root:rootpassword@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_MASTER_ADDR: "redis-master:6379"
       REDIS_SLAVE_ADDR: "redis-slave:6379"
+      JWT_SECRET: "paimai_dev_secret_2026"
     depends_on:
       mysql:
         condition: service_healthy
