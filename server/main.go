@@ -68,6 +68,12 @@ func main() {
 	if database != nil {
 		adminStore := repository.NewGormAdminStore(database)
 
+		// 启动 Outbox → Redis Stream 轮询器
+		if redisClients != nil && redisClients.Master != nil {
+			outboxPoller := stream.NewOutboxPoller(adminStore, redisClients.Master)
+			go outboxPoller.Start(context.Background())
+		}
+
 		// 认证服务（注册/登录无需鉴权，在全局中间件前注册）
 		authStore := repository.NewGormAuthStore(database)
 		authService := service.NewAuthService(authStore)
@@ -90,7 +96,7 @@ func main() {
 
 		// 用户端服务（出价、排行榜、直播间）
 		publicStore := repository.NewGormPublicStore(database)
-		publicService := service.NewPublicService(publicStore, redisClients, streamPublisher, settleService)
+		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
 		handler.RegisterPublicRoutes(r, publicService, hub)
 
 		// 启动时结算已过期的 running 竞拍

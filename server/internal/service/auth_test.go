@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"paimai/internal/model"
+	"paimai/internal/repository"
 )
 
 // authStoreStub 内存版 AuthStore，用于用户认证单元测试。
@@ -71,6 +72,10 @@ func (s *authStoreStub) GetUserAuthByUserID(_ context.Context, userID uint64) (*
 }
 
 // TestRegisterSuccess 验证注册成功返回 token 和用户信息。
+func (s *authStoreStub) WithTx(_ context.Context, fn func(repository.AuthStore) error) error {
+	return fn(s)
+}
+
 func TestRegisterSuccess(t *testing.T) {
 	svc := newAuthTestHarness()
 

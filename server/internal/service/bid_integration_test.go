@@ -76,7 +76,7 @@ func TestBidPersistenceIntegration(t *testing.T) {
 
 	publicStore := repository.NewGormPublicStore(db)
 	streamPublisher := stream.NewPublisher(redisClients.Master)
-	svc := NewPublicService(publicStore, redisClients, streamPublisher)
+	svc := NewPublicService(publicStore, nil, redisClients, streamPublisher, nil)
 
 	result, err := svc.PlaceBid(ctx, auction.ID, BidInput{
 		UserID:         10,
@@ -271,7 +271,7 @@ func TestBidToWSFullPipeline(t *testing.T) {
 
 	publicStore := repository.NewGormPublicStore(db)
 	publisher := stream.NewPublisher(redisClients.Master)
-	svc := NewPublicService(publicStore, redisClients, publisher)
+	svc := NewPublicService(publicStore, nil, redisClients, publisher, nil)
 
 	result, err := svc.PlaceBid(ctx, auction.ID, BidInput{
 		UserID:         99,

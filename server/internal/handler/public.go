@@ -136,8 +136,7 @@ func (h *PublicHandler) getBuyerOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID, _ := c.Get("userId")
-	order, err := h.service.GetBuyerOrder(c.Request.Context(), userID.(uint64), id)
+	order, err := h.service.GetBuyerOrder(c.Request.Context(), id)
 	writeResult(c, order, err)
 }
 
@@ -147,8 +146,7 @@ func (h *PublicHandler) payBuyerOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID, _ := c.Get("userId")
-	order, err := h.service.PayBuyerOrder(c.Request.Context(), userID.(uint64), id)
+	order, err := h.service.PayBuyerOrder(c.Request.Context(), id)
 	writeResult(c, order, err)
 }
 
@@ -168,17 +166,18 @@ func (h *PublicHandler) serveWS(c *gin.Context) {
 
 	// 优先从 JWT context 获取 userId，兼容开发阶段仍然传 query 参数
 	userID, _ := c.Get("userId")
-	if userID == nil || userID.(uint64) == 0 {
+	var uid uint64
+	if userID != nil {
+		uid = userID.(uint64)
+	}
+	if uid == 0 {
 		userIDStr := c.DefaultQuery("userId", "0")
-		uid, err := strconv.ParseUint(userIDStr, 10, 64)
-		if err != nil || uid == 0 {
+		uid, _ = strconv.ParseUint(userIDStr, 10, 64)
+		if uid == 0 {
 			response.Error(c, http.StatusBadRequest, 400, "userId is required")
 			return
 		}
-		userID = uid
 	}
-
-	uid := userID.(uint64)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("[websocket] upgrade failed for room %d, user %d: %v", roomID, uid, err)

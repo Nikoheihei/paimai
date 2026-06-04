@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -13,28 +14,19 @@ import (
 )
 
 const (
-	// streamKey 是出价事件的 Redis Stream 名称。
-	streamKey = "auction:events"
-
-	// consumerGroup 是 Redis Stream 消费者组名称。
-	consumerGroup = "auction:ws-pusher"
-
-	// consumerName 是当前实例的消费者名称（单实例用固定名称）。
-	consumerName = "instance-1"
-
-	// maxStreamLen 是 Stream 的最大长度，超过后自动裁剪旧消息。
-	maxStreamLen = 10000
-
-	// pollInterval 是每次 XREADGROUP 阻塞等待的超时时间。
-	pollInterval = 2 * time.Second
+	streamKey       = "auction:events"
+	consumerGroup   = "auction:processors"
+	consumerName    = "instance-1"
+	maxStreamLen    = 10000
+	pollInterval    = 2 * time.Second
 )
 
 // Event 是 Stream 中每条消息的载荷结构。
 type Event struct {
-	Type      string          `json:"type"`      // 事件类型：bid.accepted
-	RoomID    uint64          `json:"roomId"`    // 直播间 ID
-	AuctionID uint64          `json:"auctionId"` // 竞拍 ID
-	Payload   json.RawMessage `json:"payload"`   // 事件详情
+	Type      string          `json:"type"`
+	RoomID    uint64          `json:"roomId"`
+	AuctionID uint64          `json:"auctionId"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 // Publisher 负责向 Redis Stream 写入事件。
@@ -62,7 +54,7 @@ func (p *Publisher) Publish(ctx context.Context, evt Event) error {
 	}).Err()
 }
 
-// Consumer 负责消费 Redis Stream 中的事件，并通过 WebSocket Hub 广播。
+// Consumer 负责消费 Redis Stream 中的事件，更新 Redis 状态和通过 WebSocket Hub 广播。
 type Consumer struct {
 	client *goredis.Client
 	hub    *ws.Hub
@@ -73,7 +65,7 @@ func NewConsumer(client *goredis.Client, hub *ws.Hub) *Consumer {
 	return &Consumer{client: client, hub: hub}
 }
 
-// ensureGroup 确保 Stream 消费者组存在；如果不存在则自动创建。
+// ensureGroup 确保 Stream 消费者组存在。
 func (c *Consumer) ensureGroup(ctx context.Context) error {
 	err := c.client.Do(ctx, "XGROUP", "CREATE", streamKey, consumerGroup, "0", "MKSTREAM").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
@@ -82,20 +74,18 @@ func (c *Consumer) ensureGroup(ctx context.Context) error {
 	return nil
 }
 
-// Start 在独立的 goroutine 中循环消费 Stream 事件。
-// ctx 取消时退出循环，适合作为后台协程启动。
+// Start 在独立 goroutine 中循环消费 Stream 事件。
 func (c *Consumer) Start(ctx context.Context) {
 	if err := c.ensureGroup(ctx); err != nil {
 		log.Printf("[stream] 创建消费者组失败: %v", err)
 		return
 	}
-
-	log.Println("[stream] 消费者已启动，等待事件...")
+	log.Println("[stream] consumer started, waiting for events...")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[stream] 消费者已退出")
+			log.Println("[stream] consumer stopped")
 			return
 		default:
 			c.poll(ctx)
@@ -103,7 +93,7 @@ func (c *Consumer) Start(ctx context.Context) {
 	}
 }
 
-// poll 执行一次 XREADGROUP 阻塞读取并处理事件。
+// poll 执行一次 XREADGROUP 读取并处理事件。
 func (c *Consumer) poll(ctx context.Context) {
 	result, err := c.client.XReadGroup(ctx, &goredis.XReadGroupArgs{
 		Group:    consumerGroup,
@@ -115,7 +105,6 @@ func (c *Consumer) poll(ctx context.Context) {
 	if err != nil {
 		return
 	}
-
 	if len(result) == 0 {
 		return
 	}
@@ -127,9 +116,8 @@ func (c *Consumer) poll(ctx context.Context) {
 	}
 }
 
-// processMessage 解析单条 Stream 消息并调用 Hub 广播。
+// processMessage 解析单条 Stream 消息并执行：更新 Redis 状态 + WS 广播。
 func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage) {
-	log.Printf("[stream] 处理消息: id=%s", message.ID)
 	payloadStr, ok := message.Values["payload"].(string)
 	if !ok {
 		log.Printf("[stream] 跳过无效消息: %v", message.Values)
@@ -144,19 +132,82 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 		return
 	}
 
-	// 将事件原封不动通过 WebSocket 推送到对应房间
-	wsMsg, err := ws.NewWsMessage(evt.Type, evt)
-	if err != nil {
-		log.Printf("[stream] 构造 WS 消息失败: %v", err)
-		c.ack(ctx, message.ID)
-		return
+	// 根据事件类型处理
+	switch evt.Type {
+	case "bid.accepted":
+		c.handleBidAccepted(ctx, &evt)
+	default:
+		log.Printf("[stream] 未知事件类型: %s", evt.Type)
 	}
 
-	c.hub.Broadcast(evt.RoomID, wsMsg)
+	// WS 广播（所有类型的事件都推送给房间客户端）
+	wsMsg, err := ws.NewWsMessage(evt.Type, evt)
+	if err == nil {
+		c.hub.Broadcast(evt.RoomID, wsMsg)
+	}
+
 	c.ack(ctx, message.ID)
 }
 
-// ack 确认消息已处理完成，避免重复消费。
+// handleBidAccepted 处理出价事件：更新 Redis 竞拍状态和排行榜。
+func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
+		log.Printf("[stream] 解析 bid.accepted payload 失败: %v", err)
+		return
+	}
+
+	auctionID := uint64(0)
+	if id, ok := payload["auctionId"].(float64); ok {
+		auctionID = uint64(id)
+	}
+	userID := uint64(0)
+	if id, ok := payload["userId"].(float64); ok {
+		userID = uint64(id)
+	}
+	amount := int64(0)
+	if a, ok := payload["amount"].(float64); ok {
+		amount = int64(a)
+	}
+	status, _ := payload["status"].(string)
+	price := int64(0)
+	if p, ok := payload["price"].(float64); ok {
+		price = int64(p)
+	}
+
+	stateKey := fmt.Sprintf("auction:%d:state", auctionID)
+	bidsKey := fmt.Sprintf("auction:%d:bids", auctionID)
+
+	pipe := c.client.Pipeline()
+
+	// 更新竞拍状态（HSET）
+	pipe.HSet(ctx, stateKey, map[string]interface{}{
+		"status":             status,
+		"currentPriceCents":  strconv.FormatInt(price, 10),
+		"leaderUserId":       strconv.FormatUint(userID, 10),
+	})
+	pipe.Expire(ctx, stateKey, 86400*time.Second)
+
+	// 更新排行榜（ZSet — 以最高出价为 score）
+	pipe.ZAdd(ctx, bidsKey, goredis.Z{
+		Score:  float64(amount),
+		Member: strconv.FormatUint(userID, 10),
+	})
+	pipe.Expire(ctx, bidsKey, 86400*time.Second)
+
+	// 记录最后出价时间（频率检查用）
+	lastTsKey := fmt.Sprintf("auction:%d:last_bid_ts:%d", auctionID, userID)
+	pipe.Set(ctx, lastTsKey, time.Now().UnixMilli(), 86400*time.Second)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("[stream] 更新 Redis 状态失败 (auction=%d): %v", auctionID, err)
+		return
+	}
+
+	// sold 状态已在 Pipeline 的 HSET 中设置（payload.status 为 "sold"），无需重复写入
+}
+
+// ack 确认消息处理完成。
 func (c *Consumer) ack(ctx context.Context, messageID string) {
 	if err := c.client.XAck(ctx, streamKey, consumerGroup, messageID).Err(); err != nil {
 		log.Printf("[stream] ack 消息 %s 失败: %v", messageID, err)

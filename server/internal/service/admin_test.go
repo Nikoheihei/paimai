@@ -206,6 +206,44 @@ func (s *adminStoreStub) ListRunningExpiredAuctions(_ context.Context) ([]model.
 }
 
 // TestAdminServiceAuctionLifecycle 验证竞拍从创建、发布到启动的核心生命周期。
+func (s *adminStoreStub) WithTx(_ context.Context, fn func(repository.AdminStore) error) error {
+	return fn(s)
+}
+
+func (s *adminStoreStub) CreateBid(_ context.Context, bid *model.Bid) error {
+	return nil
+}
+
+func (s *adminStoreStub) UpdateAuctionBidState(_ context.Context, auction *model.Auction) error {
+	existing, ok := s.auctions[auction.ID]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if existing.Version != auction.Version {
+		return errors.New("optimistic lock: version mismatch")
+	}
+	auction.Version++
+	cp := *auction
+	s.auctions[auction.ID] = &cp
+	return nil
+}
+
+func (s *adminStoreStub) CreateOutboxEvent(_ context.Context, evt *model.OutboxEvent) error {
+	return nil
+}
+
+func (s *adminStoreStub) PickPendingOutboxEvents(_ context.Context, limit int) ([]model.OutboxEvent, error) {
+	return nil, nil
+}
+
+func (s *adminStoreStub) MarkOutboxEventDone(_ context.Context, id uint64) error {
+	return nil
+}
+
+func (s *adminStoreStub) MarkOutboxEventFailed(_ context.Context, id uint64) error {
+	return nil
+}
+
 func TestAdminServiceAuctionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store := newAdminStoreStub()

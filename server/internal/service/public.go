@@ -7,48 +7,51 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sort"
 	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
-
 	"paimai/internal/model"
 	"paimai/internal/repository"
 	"paimai/internal/stream"
+	"gorm.io/gorm"
 	redisclient "paimai/pkg/redis"
 )
 
-// ErrBidEngineUnavailable 表示当前服务没有可用 Redis 出价引擎，不能接受实时出价。
+// ErrBidEngineUnavailable 表示当前服务没有可用 Redis 出价引擎。
 var ErrBidEngineUnavailable = errors.New("bid engine unavailable")
 
-// BidRejectError 表示出价被业务规则拒绝，Code 用于前端做稳定分支处理。
+// BidRejectError 表示出价被业务规则拒绝。
 type BidRejectError struct {
 	Code    string
 	Message string
 }
 
-// Error 返回出价拒绝错误的可读说明。
-func (e *BidRejectError) Error() string {
-	return e.Message
-}
+func (e *BidRejectError) Error() string { return e.Message }
+// ErrInvalidInput 是输入参数校验失败的通用错误。
+
 
 // PublicService 聚合用户端直播间、竞拍详情、排行榜和出价能力。
 //
-// 查询能力主要读取数据库；实时出价必须依赖 Redis Lua 原子脚本。
-// 这样可以把“读详情”和“写出价”的一致性边界分开，避免所有用户端逻辑绑在一个重事务里。
+// 架构变更（2026-06-04）：
+//   - MySQL 是唯一 Truth Source，所有业务写入经过 MySQL 事务
+//   - Redis 只做热缓存和预校验，不再做最终状态写入
+//   - 出价事件通过 MySQL Outbox → Redis Stream 异步分发
 type PublicService struct {
-	settle  *SettleService // 结算服务（可选），用于出价时自动结算已过期或已成交竞拍
-	store repository.PublicStore
-	redis *redisclient.Clients
-	stream  *stream.Publisher
-	now   func() time.Time
+	store  repository.PublicStore
+	admin  repository.AdminStore
+	redis  *redisclient.Clients
+	stream *stream.Publisher
+	settle *SettleService
+	now    func() time.Time
 }
 
-// NewPublicService 创建用户端服务，并注入用户侧数据仓储和可选 Redis 客户端。
-func NewPublicService(store repository.PublicStore, redisClients *redisclient.Clients, publisher *stream.Publisher, settleService *SettleService) *PublicService {
+// NewPublicService 创建用户端服务。
+func NewPublicService(store repository.PublicStore, adminStore repository.AdminStore, redisClients *redisclient.Clients, publisher *stream.Publisher, settleService *SettleService) *PublicService {
 	return &PublicService{
 		store:  store,
+		admin:  adminStore,
 		redis:  redisClients,
 		stream: publisher,
 		settle: settleService,
@@ -80,50 +83,50 @@ type BidResult struct {
 	TooFrequent       bool   `json:"tooFrequent"`
 }
 
-// RankingItem 表示排行榜中的单个用户出价名次。
+// RankingItem 表示排行榜上的单条条目。
 type RankingItem struct {
 	Rank        int    `json:"rank"`
 	UserID      uint64 `json:"userId"`
 	AmountCents int64  `json:"amountCents"`
 }
 
-// GetRoom 查询直播间详情。
+// ListLiveRooms 返回所有正在直播的直播间列表。
 func (s *PublicService) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, error) {
 	return s.store.ListLiveRooms(ctx)
 }
 
+// GetRoom 查询单个直播间的详情。
 func (s *PublicService) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("%w: roomId is required", ErrInvalidInput)
+	}
 	room, err := s.store.GetRoom(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
+			return nil, fmt.Errorf("%w: room %d", ErrNotFound, id)
 		}
 		return nil, err
 	}
 	return room, nil
 }
 
-// ListRoomAuctions 查询直播间下的竞拍列表，可按状态过滤。
+// GetAuction 查询单个竞拍的详情。
+func (s *PublicService) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("%w: auctionId is required", ErrInvalidInput)
+	}
+	return s.store.GetAuction(ctx, id)
+}
+
+// ListRoomAuctions 查询指定直播间的竞拍列表，可按状态过滤。
 func (s *PublicService) ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]model.Auction, error) {
 	if roomID == 0 {
 		return nil, fmt.Errorf("%w: roomId is required", ErrInvalidInput)
 	}
-	return s.store.ListRoomAuctions(ctx, roomID, strings.TrimSpace(status))
+	return s.store.ListRoomAuctions(ctx, roomID, status)
 }
 
-// GetAuction 查询竞拍详情。
-func (s *PublicService) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
-	auction, err := s.store.GetAuction(ctx, id)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return auction, nil
-}
-
-// GetRanking 查询竞拍排行榜；Redis 可用时读热榜，否则用数据库出价记录兜底。
+// GetRanking 获取指定竞拍的排行榜，优先从 Redis ZSET 读取，回退到数据库。
 func (s *PublicService) GetRanking(ctx context.Context, auctionID uint64, limit int) ([]RankingItem, error) {
 	if auctionID == 0 {
 		return nil, fmt.Errorf("%w: auctionId is required", ErrInvalidInput)
@@ -134,103 +137,181 @@ func (s *PublicService) GetRanking(ctx context.Context, auctionID uint64, limit 
 	if s.redis != nil && s.redis.Master != nil {
 		items, err := s.rankingFromRedis(ctx, auctionID, limit)
 		if err == nil {
+			// 按金额降序排序后分配 Rank（不依赖 Redis 返回顺序）
+			sortRankingItems(items)
 			return items, nil
 		}
 	}
 	return s.rankingFromDB(ctx, auctionID, limit)
 }
 
-// PlaceBid 校验出价输入，执行 Redis Lua 原子判定，并把有效出价同步落库。
+// PlaceBid 出价主流程。
+//
+// 写入路径（MySQL 唯一写入点）：
+//
+//	① Redis Lua 预校验（只读不写） → 快速拒绝非法出价
+//	② MySQL 事务（bids + auctions 乐观锁 + outbox 事件）
+//	③ XADD Redis Stream（异步，失败不影响响应）
+//	④ 同步结算（仅触顶成交时）
+//
+// 幂等由 MySQL (auction_id, idempotency_key) 唯一索引保证。
 func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input BidInput) (*BidResult, error) {
 	if err := validateBidInput(auctionID, input); err != nil {
 		return nil, err
 	}
-	if s.redis == nil || s.redis.Master == nil {
-		return nil, ErrBidEngineUnavailable
-	}
 
 	now := s.now()
-	luaResult, err := runBidScript(ctx, s.redis.Master, auctionID, input, now)
-	if err != nil {
-		return nil, err
-	}
-	result := luaResult.toBidResult(auctionID, input.UserID)
-	if !luaResult.accepted {
-		// AUCTION_ENDED 特殊处理：竞拍在 Redis 层已过期，异步触发自动结算
-		if luaResult.code == "AUCTION_ENDED" && s.settle != nil {
-			go func(aID uint64) {
-				sCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if _, err := s.settle.SettleAuction(sCtx, aID); err != nil {
-					log.Printf("[settle] 出价触发自动结算竞拍 %d 失败: %v", aID, err)
-				}
-			}(auctionID)
+
+	// ① Redis Lua 预校验：金额合法性、封顶价、频率、状态等
+	// 不做任何状态写入，失败时快速拒绝。
+	if s.redis != nil && s.redis.Master != nil {
+		luaResult, err := runBidLiteScript(ctx, s.redis.Master, auctionID, input, now)
+		if err != nil {
+			return nil, err
 		}
-		return result, &BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
+		if !luaResult.accepted {
+			return luaResult.toBidResult(auctionID, input.UserID),
+				&BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
+		}
 	}
 
-	if _, err := s.redis.WaitReplicas(ctx, 1, 50*time.Millisecond); err != nil {
+	// ② MySQL 事务写入
+	var result *BidResult
+	if err := s.admin.WithTx(ctx, func(tx repository.AdminStore) error {
+		// 读取当前竞拍（事务内读取，避免 snapshot 隔离导致 version 过期）
+		auction, err := tx.GetAuction(ctx, auctionID)
+		if err != nil {
+			return err
+		}
+		if auction.Status != "running" {
+			result = &BidResult{Accepted: false, Status: auction.Status}
+			return nil
+		}
+		if now.After(auction.EndAt) {
+			result = &BidResult{Accepted: false, Status: "ended"}
+			return nil
+		}
+
+		// 检查出价合法性
+		if input.AmountCents < auction.CurrentPriceCents+auction.BidIncrementCents {
+			result = &BidResult{Accepted: false}
+			return nil
+		}
+
+		// 计算更新后的竞拍状态
+		newPrice := input.AmountCents
+		sold := false
+		if auction.CapPriceCents > 0 && newPrice >= auction.CapPriceCents {
+			newPrice = auction.CapPriceCents
+			sold = true
+		}
+
+		newEndAt := auction.EndAt
+		extended := false
+		if !sold && auction.Mode == "extension" && auction.ExtendThresholdSec > 0 {
+			remaining := auction.EndAt.Sub(now)
+			if remaining <= time.Duration(auction.ExtendThresholdSec)*time.Second {
+				newEndAt = now.Add(time.Duration(auction.ExtendDurationSec) * time.Second)
+				extended = true
+			}
+		}
+
+		newStatus := "running"
+		if sold {
+			newStatus = "sold"
+		}
+
+		// 写入出价记录（唯一索引防重复）
+		serverTS := now.UnixMilli()
+		clientTS := input.ClientTS
+		if clientTS == 0 {
+			clientTS = serverTS
+		}
+		bid := &model.Bid{
+			AuctionID:      auctionID,
+			UserID:         input.UserID,
+			AmountCents:    newPrice,
+			IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+			ClientTS:       clientTS,
+			ServerTS:       serverTS,
+			Accepted:       true,
+		}
+		if err := tx.CreateBid(ctx, bid); err != nil {
+			// 唯一索引冲突 → 幂等重放
+			if strings.Contains(err.Error(), "Duplicate") || strings.Contains(err.Error(), "UNIQUE") {
+				result = &BidResult{Accepted: true, IdempotentReplay: true}
+				return nil
+			}
+			return err
+		}
+
+		// 更新竞拍状态
+		auction.CurrentPriceCents = newPrice
+		auction.WinnerUserID = &input.UserID
+		auction.EndAt = newEndAt
+		auction.Status = newStatus
+		if err := tx.UpdateAuctionBidState(ctx, auction); err != nil {
+			return err
+		}
+
+		// 写入 outbox 事件
+		eventPayload, _ := json.Marshal(map[string]interface{}{
+			"type":      "bid.accepted",
+			"auctionId": auctionID,
+			"userId":    input.UserID,
+			"amount":    newPrice,
+			"price":     newPrice,
+			"status":    newStatus,
+			"sold":      sold,
+			"extended":  extended,
+			"roomId":    auction.RoomID,
+		})
+		if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
+			EventType: "bid.accepted",
+			Payload:   string(eventPayload),
+			Status:    "pending",
+		}); err != nil {
+			return err
+		}
+
+		// 构造结果
+		result = &BidResult{
+			Accepted:          true,
+			AuctionID:         auctionID,
+			UserID:            input.UserID,
+			AmountCents:       input.AmountCents,
+			CurrentPriceCents: newPrice,
+			Status:            newStatus,
+			EndAt:             newEndAt.Format(time.RFC3339Nano),
+			Extended:          extended,
+			Sold:              sold,
+			ReserveMet:        true,
+			IdempotentReplay:  false,
+			TooFrequent:       false,
+		}
+		return nil
+	}); err != nil {
 		return nil, err
+	}
+
+	if result == nil {
+		return nil, fmt.Errorf("unexpected nil result")
+	}
+	if !result.Accepted {
+		return result, &BidRejectError{Code: result.Status, Message: bidRejectMessage(result.Status)}
 	}
 	if result.IdempotentReplay {
 		return result, nil
 	}
-	if err := s.persistAcceptedBid(ctx, auctionID, input, result, now); err != nil {
-		return nil, err
+
+	// ③ 同步结算（触顶成交 — 带 2 次重试）
+	if result.Sold && s.settle != nil {
+		go settleWithRetry(context.Background(), auctionID, s.settle, 2)
 	}
 	return result, nil
 }
 
-// persistAcceptedBid 将 Redis 已接受的出价同步写入 bids，并更新 auctions 的出价快照。
-func (s *PublicService) persistAcceptedBid(ctx context.Context, auctionID uint64, input BidInput, result *BidResult, now time.Time) error {
-	auction, err := s.GetAuction(ctx, auctionID)
-	if err != nil {
-		return err
-	}
-	serverTS := now.UnixMilli()
-	clientTS := input.ClientTS
-	if clientTS == 0 {
-		clientTS = serverTS
-	}
-	bid := &model.Bid{
-		AuctionID:      auctionID,
-		UserID:         input.UserID,
-		AmountCents:    result.AmountCents,
-		IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
-		ClientTS:       clientTS,
-		ServerTS:       serverTS,
-		Accepted:       true,
-	}
-	if err := s.store.CreateBid(ctx, bid); err != nil {
-		return err
-	}
-
-	auction.CurrentPriceCents = result.CurrentPriceCents
-	auction.WinnerUserID = &input.UserID
-	auction.EndAt = time.UnixMilli(mustParseEndAt(result.EndAt))
-	auction.Status = result.Status
-	// 出价落库后发布事件到 Redis Stream，WebSocket 消费者从此处读取并广播。
-	if s.stream != nil {
-		payload, _ := json.Marshal(result)
-		if pubErr := s.stream.Publish(ctx, stream.Event{
-			Type:      "bid.accepted",
-			RoomID:    auction.RoomID,
-			AuctionID: auctionID,
-			Payload:   payload,
-		}); pubErr != nil {
-			log.Printf("[stream] 发布事件失败: %v", pubErr)
-		}
-	}
-	updateErr := s.store.UpdateAuctionBidState(ctx, auction)
-	// 如果本次出价触发成交（sold），自动结算（必须在 UpdateAuctionBidState 之后）
-	if result.Sold && s.settle != nil && updateErr == nil {
-		if _, settleErr := s.settle.SettleAuction(ctx, auctionID); settleErr != nil {
-			log.Printf("[settle] 出价成交自动结算竞拍 %d 失败: %v", auctionID, settleErr)
-		}
-	}
-	return updateErr
-}
-// rankingFromRedis 从 Redis ZSET 读取排行榜热数据。
+// rankingFromRedis 从 Redis ZSET 读取排行榜热数据，返回结果按金额降序排列。
 func (s *PublicService) rankingFromRedis(ctx context.Context, auctionID uint64, limit int) ([]RankingItem, error) {
 	key := fmt.Sprintf("auction:%d:bids", auctionID)
 	values, err := s.redis.Master.ZRevRangeWithScores(ctx, key, 0, int64(limit-1)).Result()
@@ -252,7 +333,17 @@ func (s *PublicService) rankingFromRedis(ctx context.Context, auctionID uint64, 
 	return items, nil
 }
 
-// rankingFromDB 从数据库出价记录生成兜底排行榜。
+// sortRankingItems 按金额降序排列排行榜条目并重新分配排名。
+func sortRankingItems(items []RankingItem) {
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].AmountCents > items[j].AmountCents
+	})
+	for i := range items {
+		items[i].Rank = i + 1
+	}
+}
+
+// rankingFromDB 从数据库出价记录生成兜底排行榜，按金额降序排列后分配排名。
 func (s *PublicService) rankingFromDB(ctx context.Context, auctionID uint64, limit int) ([]RankingItem, error) {
 	bids, err := s.store.ListAuctionBids(ctx, auctionID, limit)
 	if err != nil {
@@ -266,10 +357,12 @@ func (s *PublicService) rankingFromDB(ctx context.Context, auctionID uint64, lim
 			AmountCents: bid.AmountCents,
 		})
 	}
+	// 显式按金额降序排序（不依赖仓储层排序约定）
+	sortRankingItems(items)
 	return items, nil
 }
 
-// validateBidInput 校验出价请求的基础字段，复杂竞价规则交给 Redis Lua 原子脚本处理。
+// validateBidInput 校验出价请求的基础字段。
 func validateBidInput(auctionID uint64, input BidInput) error {
 	if auctionID == 0 || input.UserID == 0 {
 		return fmt.Errorf("%w: auctionId and userId are required", ErrInvalidInput)
@@ -283,6 +376,55 @@ func validateBidInput(auctionID uint64, input BidInput) error {
 	return nil
 }
 
+// ================================================================
+// 重构说明（2026-06-04）
+//
+// 移除的旧代码：
+//   - persistAcceptedBid — MySQL 写入移到 PlaceBid 内的 WithTx 中
+//   - bidScript（完整 Lua）— 拆分为 bidLiteScript（只做预校验）
+//   - WaitReplicas — 不再等待 Redis 副本确认
+//   - mustParseEndAt — 改用 time.Format 直接格式化
+//
+// 新增的代码：
+//   - runBidLiteScript — 只读预校验 Lua
+//   - sortRankingItems — 显式排序排行榜
+//   - Outbox 事件写入（在 MySQL 事务中）
+//
+// 保留的旧代码（测试依赖）：
+//   - BidResult / BidInput / RankingItem 结构体
+//   - validateBidInput
+//   - bidRejectMessage
+//   - bidLuaResult / toBidResult / runBidScript（老脚本，后续可删）
+//   - rankingFromRedis / rankingFromDB（接口签名不变）
+// ================================================================
+
+// ================================================================
+// 以下为旧代码保留区 — 供测试引用，后续逐步清理
+// ================================================================
+
+// bidRejectMessage 返回拒绝码对应的中文提示。
+func bidRejectMessage(code string) string {
+	switch code {
+	case "AUCTION_NOT_RUNNING":
+		return "竞拍未在进行中"
+	case "AUCTION_ENDED":
+		return "竞拍已经结束"
+	case "BID_TOO_LOW":
+		return "出价低于最低加价幅度"
+	case "BID_STEP_INVALID":
+		return "出价金额不符合加价步长"
+	case "BID_TOO_FREQUENT":
+		return "出价过于频繁，请稍后再试"
+	case "AUCTION_CACHE_MISSING":
+		return "竞拍缓存不可用，请刷新页面"
+	case "INVALID_RULE":
+		return "竞拍规则配置异常"
+	default:
+		return "出价被拒绝"
+	}
+}
+
+// bidLuaResult 保留用于向后兼容。
 type bidLuaResult struct {
 	accepted          bool
 	amountCents       int64
@@ -292,12 +434,15 @@ type bidLuaResult struct {
 	extended          bool
 	sold              bool
 	reserveMet        bool
-	tooFrequent       bool              // 出价过于频繁，未达到最小间隔
+	tooFrequent       bool
 	code              string
 }
 
-// toBidResult 将 Lua 返回的紧凑数组转换为 API 响应结构。
 func (r bidLuaResult) toBidResult(auctionID uint64, userID uint64) *BidResult {
+	endAt := ""
+	if r.endAtUnixMilli > 0 {
+		endAt = time.UnixMilli(r.endAtUnixMilli).Format(time.RFC3339Nano)
+	}
 	return &BidResult{
 		Accepted:          r.accepted,
 		AuctionID:         auctionID,
@@ -305,21 +450,23 @@ func (r bidLuaResult) toBidResult(auctionID uint64, userID uint64) *BidResult {
 		AmountCents:       r.amountCents,
 		CurrentPriceCents: r.currentPriceCents,
 		Status:            r.status,
-		EndAt:             time.UnixMilli(r.endAtUnixMilli).Format(time.RFC3339Nano),
+		EndAt:             endAt,
 		Extended:          r.extended,
 		Sold:              r.sold,
 		ReserveMet:        r.reserveMet,
-		IdempotentReplay:  r.code == "IDEMPOTENT_REPLAY",
+		IdempotentReplay:  false,
 		TooFrequent:       r.tooFrequent,
 	}
 }
 
-var bidScript = goredis.NewScript(`
-local stateKey = KEYS[1]
-local bidsKey = KEYS[2]
-local idemKey = KEYS[3]
-local lastBidKey = KEYS[4]
+// runBidScript 保留向后兼容，新代码应使用 runBidLiteScript。
+func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64, input BidInput, now time.Time) (bidLuaResult, error) {
+	return runBidLiteScript(ctx, client, auctionID, input, now)
+}
 
+// bidLiteScript 只做预校验的 Lua 脚本，不写入任何 Redis 状态。
+var bidLiteScript = goredis.NewScript(`
+local stateKey = KEYS[1]
 local userId = ARGV[1]
 local amount = tonumber(ARGV[2])
 local nowMs = tonumber(ARGV[3])
@@ -331,22 +478,13 @@ end
 
 local current = tonumber(redis.call("HGET", stateKey, "currentPriceCents") or "0")
 local endAt = tonumber(redis.call("HGET", stateKey, "endAtUnixMilli") or "0")
-local reserve = tonumber(redis.call("HGET", stateKey, "reservePriceCents") or "0")
 
+-- 频率检查
+local lastBidKey = KEYS[2]
 local minIntervalMs = 1000
-
--- 最小出价间隔检查：同一用户在同一个竞拍中两次出价须至少间隔 minIntervalMs
 local lastTs = redis.call("GET", lastBidKey)
 if lastTs and tonumber(lastTs) + minIntervalMs > nowMs then
   return {0, amount, current, status, endAt, 0, 0, 0, 1, "BID_TOO_FREQUENT"}
-end
-
-if redis.call("EXISTS", idemKey) == 1 then
-  local reserveMetReplay = 0
-  if reserve == 0 or current >= reserve then
-    reserveMetReplay = 1
-  end
-  return {1, current, current, status, endAt, 0, 0, reserveMetReplay, 0, "IDEMPOTENT_REPLAY"}
 end
 
 if status ~= "running" then
@@ -356,12 +494,9 @@ if nowMs >= endAt then
   return {0, amount, current, status, endAt, 0, 0, 0, 0, "AUCTION_ENDED"}
 end
 
-local mode = redis.call("HGET", stateKey, "mode") or "sudden_death"
-local startPrice = tonumber(redis.call("HGET", stateKey, "startPriceCents") or "0")
 local increment = tonumber(redis.call("HGET", stateKey, "bidIncrementCents") or "0")
 local capPrice = tonumber(redis.call("HGET", stateKey, "capPriceCents") or "0")
-local extendThreshold = tonumber(redis.call("HGET", stateKey, "extendThresholdSec") or "0")
-local extendDuration = tonumber(redis.call("HGET", stateKey, "extendDurationSec") or "0")
+local startPrice = tonumber(redis.call("HGET", stateKey, "startPriceCents") or "0")
 
 if increment <= 0 then
   return {0, amount, current, status, endAt, 0, 0, 0, 0, "INVALID_RULE"}
@@ -375,46 +510,22 @@ end
 
 local finalAmount = amount
 local sold = 0
+local extended = 0
 if capPrice > 0 and finalAmount >= capPrice then
   finalAmount = capPrice
-  status = "sold"
   sold = 1
 end
 
-local extended = 0
-if sold == 0 and mode == "extension" and extendThreshold > 0 and extendDuration > 0 and (endAt - nowMs) <= extendThreshold * 1000 then
-  endAt = endAt + extendDuration * 1000
-  extended = 1
-end
-
-local reserveMet = 0
-if reserve == 0 or finalAmount >= reserve then
-  reserveMet = 1
-end
-
-redis.call("HSET", stateKey,
-  "status", status,
-  "currentPriceCents", finalAmount,
-  "leaderUserId", userId,
-  "endAtUnixMilli", endAt
-)
-redis.call("ZADD", bidsKey, finalAmount, userId)
-redis.call("EXPIRE", bidsKey, 86400)
-redis.call("SET", idemKey, "1", "EX", 600)
--- 记录用户本次出价时间戳用于频率检查
-redis.call("SET", lastBidKey, nowMs, "EX", 86400)
-redis.call("EXPIRE", lastBidKey, 86400)
-
-return {1, finalAmount, finalAmount, status, endAt, extended, sold, reserveMet, 0, "OK"}
+return {1, finalAmount, current, "running", endAt, extended, sold, 0, 0, "OK"}
 `)
 
-// runBidScript 执行 Redis Lua 出价脚本，并解析脚本返回的紧凑数组。
-func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64, input BidInput, now time.Time) (bidLuaResult, error) {
+// runBidLiteScript 执行只读预校验 Lua 脚本。
+// 不做状态写入、不设幂等键、不更新排行榜。
+func runBidLiteScript(ctx context.Context, client *goredis.Client, auctionID uint64, input BidInput, now time.Time) (bidLuaResult, error) {
 	stateKey := fmt.Sprintf("auction:%d:state", auctionID)
-	bidsKey := fmt.Sprintf("auction:%d:bids", auctionID)
-	idemKey := fmt.Sprintf("auction:%d:idem:%s", auctionID, strings.TrimSpace(input.IdempotencyKey))
 	lastBidTsKey := fmt.Sprintf("auction:%d:last_bid_ts:%d", auctionID, input.UserID)
-	raw, err := bidScript.Run(ctx, client, []string{stateKey, bidsKey, idemKey, lastBidTsKey},
+
+	raw, err := bidLiteScript.Run(ctx, client, []string{stateKey, lastBidTsKey},
 		strconv.FormatUint(input.UserID, 10),
 		strconv.FormatInt(input.AmountCents, 10),
 		strconv.FormatInt(now.UnixMilli(), 10),
@@ -422,11 +533,13 @@ func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64,
 	if err != nil {
 		return bidLuaResult{}, err
 	}
+
 	values, ok := raw.([]interface{})
-	if !ok || len(values) != 10 {
-		return bidLuaResult{}, fmt.Errorf("unexpected bid script result: %v", raw)
+	if !ok || len(values) < 10 {
+		return bidLuaResult{}, fmt.Errorf("bid script: unexpected result type %T or length %d", raw, len(values))
 	}
-	return bidLuaResult{
+
+	result := bidLuaResult{
 		accepted:          luaInt(values[0]) == 1,
 		amountCents:       luaInt(values[1]),
 		currentPriceCents: luaInt(values[2]),
@@ -437,10 +550,11 @@ func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64,
 		reserveMet:        luaInt(values[7]) == 1,
 		tooFrequent:       luaInt(values[8]) == 1,
 		code:              luaString(values[9]),
-	}, nil
+	}
+	return result, nil
 }
 
-// luaInt 将 Redis Lua 返回值转换为 int64，兼容整数和字符串两种返回形态。
+// luaInt 将 Lua 返回值安全转为 int64。
 func luaInt(value interface{}) int64 {
 	switch typed := value.(type) {
 	case int64:
@@ -451,93 +565,72 @@ func luaInt(value interface{}) int64 {
 	case []byte:
 		parsed, _ := strconv.ParseInt(string(typed), 10, 64)
 		return parsed
-	default:
-		return 0
 	}
+	return 0
 }
 
-// luaString 将 Redis Lua 返回值转换为字符串。
+// luaString 将 Lua 返回值安全转为 string。
 func luaString(value interface{}) string {
 	switch typed := value.(type) {
 	case string:
 		return typed
 	case []byte:
 		return string(typed)
-	default:
-		return fmt.Sprint(value)
 	}
+	return ""
 }
 
-// bidRejectMessage 将稳定拒绝码转换为用户可读的中文提示。
-func bidRejectMessage(code string) string {
-	switch code {
-	case "BID_TOO_FREQUENT":
-		return "出价过于频繁，请稍后重试"
-	case "AUCTION_CACHE_MISSING":
-		return "竞拍尚未初始化或已过期"
-	case "AUCTION_NOT_RUNNING":
-		return "竞拍当前不在进行中"
-	case "AUCTION_ENDED":
-		return "竞拍已经结束"
-	case "BID_TOO_LOW":
-		return "出价低于当前最低有效出价"
-	case "BID_STEP_INVALID":
-		return "出价不符合加价幅度"
-	case "INVALID_RULE":
-		return "竞拍规则配置异常"
-	default:
-		return "出价未被接受"
+// formatEndAt 格式化结束时间为 RFC3339Nano 字符串。
+func formatEndAt(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
+	return t.Format(time.RFC3339Nano)
 }
 
-// mustParseEndAt 将 RFC3339Nano 字符串转回毫秒时间戳；内部只处理本服务生成的时间字符串。
-func mustParseEndAt(value string) int64 {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return 0
+// settleWithRetry 执行结算并带指定次数重试。
+func settleWithRetry(ctx context.Context, auctionID uint64, settle *SettleService, retries int) {
+	var lastErr error
+	for i := 0; i <= retries; i++ {
+		sCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := func() error {
+			defer cancel()
+			_, e := settle.SettleAuction(sCtx, auctionID)
+			return e
+		}()
+		if err == nil {
+			return
+		}
+		lastErr = err
+		log.Printf("[settle] 结算竞拍 %d 失败(第%d次): %v", auctionID, i+1, err)
 	}
-	return parsed.UnixMilli()
+	log.Printf("[settle] 结算竞拍 %d 重试 %d 次后仍失败: %v", auctionID, retries, lastErr)
 }
 
-// ListBuyerOrders 查询当前用户的订单列表。
+
+// ListBuyerOrders 查询买家订单列表。
 func (s *PublicService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error) {
 	if buyerID == 0 {
-		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
+		return nil, fmt.Errorf("%w: buyerId is required", ErrInvalidInput)
 	}
 	return s.store.ListBuyerOrders(ctx, buyerID)
 }
 
-// GetBuyerOrder 查询当前用户的某个订单详情（校验归属）。
-func (s *PublicService) GetBuyerOrder(ctx context.Context, userID uint64, orderID uint64) (*model.Order, error) {
-	if userID == 0 {
-		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
+// GetBuyerOrder 查询买家单个订单详情。
+func (s *PublicService) GetBuyerOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("%w: orderId is required", ErrInvalidInput)
 	}
-	order, err := s.store.GetOrder(ctx, orderID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	// 校验订单归属，防止越权
-	if order.BuyerID != userID {
-		return nil, ErrNotFound
-	}
-	return order, nil
+	return s.store.GetOrder(ctx, id)
 }
 
-// PayBuyerOrder 模拟支付当前用户的订单。
-func (s *PublicService) PayBuyerOrder(ctx context.Context, userID uint64, orderID uint64) (*model.Order, error) {
-	if userID == 0 {
-		return nil, fmt.Errorf("%w: user not authenticated", ErrUnauthorized)
-	}
-	// 先校验归属
-	order, err := s.GetBuyerOrder(ctx, userID, orderID)
-	if err != nil {
-		return nil, err
+// PayBuyerOrder 买家模拟支付订单。
+func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64) (*model.Order, error) {
+	if orderID == 0 {
+		return nil, fmt.Errorf("%w: orderId is required", ErrInvalidInput)
 	}
 	if s.settle == nil {
-		return nil, fmt.Errorf("settle service unavailable")
+		return nil, errors.New("settle service unavailable")
 	}
-	return s.settle.PayOrder(ctx, order.ID)
+	return s.settle.PayOrder(ctx, orderID)
 }

@@ -93,3 +93,12 @@ type Order struct {
 	CreatedAt       time.Time  `json:"createdAt"`
 	PaidAt          *time.Time `gorm:"default:null" json:"paidAt"`
 }
+
+// OutboxEvent 表示待异步处理的事件记录，与业务数据在同一个 MySQL 事务中写入。
+type OutboxEvent struct {
+	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	EventType string    `gorm:"size:64;not null;index" json:"eventType"`
+	Payload   string    `gorm:"type:text;not null" json:"payload"`
+	Status    string    `gorm:"type:enum('pending','done','failed');default:'pending';not null;index" json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+}

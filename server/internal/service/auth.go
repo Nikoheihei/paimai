@@ -98,20 +98,26 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*AuthR
 	}
 
 	// 事务：创建 User（社交资料）+ UserAuth（认证信息）
-	user := &model.User{
-		Nickname: nickname,
-		Role:     "buyer", // 默认买家角色
-	}
-	if err := s.store.CreateUser(ctx, user); err != nil {
-		return nil, err
-	}
-
-	userAuth := &model.UserAuth{
-		UserID:       user.ID,
-		Username:     input.Username,
-		PasswordHash: string(hashedPassword),
-	}
-	if err := s.store.CreateUserAuth(ctx, userAuth); err != nil {
+	var user *model.User
+	if err := s.store.WithTx(ctx, func(tx repository.AuthStore) error {
+		u := &model.User{
+			Nickname: nickname,
+			Role:     "buyer",
+		}
+		if err := tx.CreateUser(ctx, u); err != nil {
+			return err
+		}
+		ua := &model.UserAuth{
+			UserID:       u.ID,
+			Username:     input.Username,
+			PasswordHash: string(hashedPassword),
+		}
+		if err := tx.CreateUserAuth(ctx, ua); err != nil {
+			return err
+		}
+		user = u
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 

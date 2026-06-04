@@ -107,7 +107,7 @@ func (s *publicStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, l
 
 // TestPublicServiceGetRoomNotFound 验证直播间不存在时转换为服务层 ErrNotFound。
 func TestPublicServiceGetRoomNotFound(t *testing.T) {
-	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil)
+	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil, nil)
 
 	_, err := svc.GetRoom(context.Background(), 404)
 	if !errors.Is(err, ErrNotFound) {
@@ -121,7 +121,7 @@ func TestPublicServiceListRoomAuctionsFiltersStatus(t *testing.T) {
 	store.auctions[1] = &model.Auction{ID: 1, RoomID: 10, Status: "running"}
 	store.auctions[2] = &model.Auction{ID: 2, RoomID: 10, Status: "scheduled"}
 	store.auctions[3] = &model.Auction{ID: 3, RoomID: 20, Status: "running"}
-	svc := NewPublicService(store, nil, nil, nil)
+	svc := NewPublicService(store, nil, nil, nil, nil)
 
 	auctions, err := svc.ListRoomAuctions(context.Background(), 10, "running")
 	if err != nil {
@@ -140,7 +140,7 @@ func TestPublicServiceRankingFallsBackToDB(t *testing.T) {
 		{AuctionID: 1, UserID: 8, AmountCents: 200, Accepted: true},
 		{AuctionID: 2, UserID: 9, AmountCents: 999, Accepted: true},
 	}
-	svc := NewPublicService(store, nil, nil, nil)
+	svc := NewPublicService(store, nil, nil, nil, nil)
 
 	ranking, err := svc.GetRanking(context.Background(), 1, 2)
 	if err != nil {
@@ -151,17 +151,19 @@ func TestPublicServiceRankingFallsBackToDB(t *testing.T) {
 	}
 }
 
-// TestPublicServicePlaceBidRequiresRedis 验证没有 Redis 出价引擎时不会接受实时出价。
+// TestPublicServicePlaceBidRequiresRedis 验证没有 Redis 时出价走 MySQL 完整路径。
+// 由于 stub 中没有对应竞拍，应该返回竞拍不存在。
 func TestPublicServicePlaceBidRequiresRedis(t *testing.T) {
-	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil)
+	store := newPublicStoreStub()
+	svc := NewPublicService(store, newAdminStoreStub(), nil, nil, nil)
 
 	_, err := svc.PlaceBid(context.Background(), 1, BidInput{
 		UserID:         10,
 		AmountCents:    100,
 		IdempotencyKey: "idem-1",
 	})
-	if !errors.Is(err, ErrBidEngineUnavailable) {
-		t.Fatalf("expected ErrBidEngineUnavailable, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for non-existent auction, got nil")
 	}
 }
 
@@ -222,7 +224,7 @@ func TestBidLuaResultToBidResult(t *testing.T) {
 		code:              "IDEMPOTENT_REPLAY",
 	}.toBidResult(1, 9)
 
-	if !result.Accepted || !result.Extended || !result.ReserveMet || !result.IdempotentReplay {
+	if !result.Accepted || !result.Extended || !result.ReserveMet {
 		t.Fatalf("unexpected bid result flags: %+v", result)
 	}
 	if result.AuctionID != 1 || result.UserID != 9 || result.CurrentPriceCents != 500 {
@@ -233,7 +235,7 @@ func TestBidLuaResultToBidResult(t *testing.T) {
 // TestBidTooFrequentRejectMessage 验证出价过于频繁时的中文拒绝提示。
 func TestBidTooFrequentRejectMessage(t *testing.T) {
 	msg := bidRejectMessage("BID_TOO_FREQUENT")
-	if msg == "" || msg == "出价未被接受" {
+	if msg == "" || msg == "出价被拒绝" {
 		t.Fatalf("expected specific reject message for BID_TOO_FREQUENT, got: %q", msg)
 	}
 }
@@ -259,6 +261,7 @@ func TestBidLuaResultTooFrequent(t *testing.T) {
 }
 
 // TestBidLuaResultIdempotentReplayFlags 验证幂等重放时各种标记正确。
+// 注意：在新架构中 toBidResult 不再设置 IdempotentReplay（由 MySQL 唯一索引负责幂等）。
 func TestBidLuaResultIdempotentReplayFlags(t *testing.T) {
 	result := bidLuaResult{
 		accepted:          true,
@@ -272,9 +275,6 @@ func TestBidLuaResultIdempotentReplayFlags(t *testing.T) {
 		code:              "IDEMPOTENT_REPLAY",
 	}.toBidResult(1, 9)
 
-	if !result.IdempotentReplay {
-		t.Fatal("expected idempotent replay to be marked")
-	}
 	if !result.ReserveMet {
 		t.Fatal("expected reserveMet to be preserved")
 	}
@@ -306,7 +306,7 @@ func TestBidLuaResultCapPriceSold(t *testing.T) {
 // TestBidRejectMessageFallback 验证未识别的拒绝码返回通用提示。
 func TestBidRejectMessageFallback(t *testing.T) {
 	msg := bidRejectMessage("UNKNOWN_REJECT_CODE_XYZ")
-	if msg != "出价未被接受" {
+	if msg != "出价被拒绝" {
 		t.Fatalf("expected fallback message, got: %q", msg)
 	}
 }
@@ -324,7 +324,7 @@ func TestBidRejectMessageKnownCodes(t *testing.T) {
 	}
 	for _, code := range knownCodes {
 		msg := bidRejectMessage(code)
-		if msg == "出价未被接受" {
+		if msg == "出价被拒绝" {
 			t.Errorf("code %q returned fallback message, expected specific one", code)
 		}
 	}
