@@ -105,6 +105,14 @@ func (s *publicStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, l
 	return bids, nil
 }
 
+func (s *publicStoreStub) GetProduct(_ context.Context, id uint64) (*model.Product, error) {
+	return nil, nil
+}
+
+func (s *publicStoreStub) GetUser(_ context.Context, id uint64) (*model.User, error) {
+	return nil, nil
+}
+
 // TestPublicServiceGetRoomNotFound 验证直播间不存在时转换为服务层 ErrNotFound。
 func TestPublicServiceGetRoomNotFound(t *testing.T) {
 	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil, nil)

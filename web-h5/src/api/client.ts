@@ -122,6 +122,8 @@ export type Auction = {
   endAt: string
   status: string
   winnerUserId: number | null
+  productName?: string
+  productImage?: string
 }
 
 export type BidResult = {
@@ -145,6 +147,8 @@ export type LiveRoom = {
   sellerId: number
   coverUrl: string
   status: string
+  anchorNickname?: string
+  anchorAvatar?: string
 }
 
 export type RankingItem = {
@@ -161,12 +165,21 @@ export type Order = {
   sellerId: number
   finalPriceCents: number
   status: string
+  addressId: number | null
+  addressSnapshot: string
   createdAt: string
   paidAt: string | null
 }
 
-export async function payBuyerOrder(orderId: number): Promise<any> {
-  return apiFetch(`/orders/${orderId}/pay`, { method: 'POST' })
+export async function payBuyerOrder(orderId: number, addressId?: number, addressSnapshot?: string): Promise<any> {
+  return apiFetch(`/orders/${orderId}/pay`, {
+    method: 'POST',
+    body: JSON.stringify({ addressId, addressSnapshot }),
+  })
+}
+
+export async function getBuyerOrder(orderId: number): Promise<Order> {
+  return apiFetch(`/orders/${orderId}`)
 }
 
 export async function getRoom(roomId: number): Promise<LiveRoom> {
@@ -192,4 +205,46 @@ export async function placeBid(auctionId: number, userId: number, amountCents: n
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, amountCents, idempotencyKey }),
   })
+}
+
+/** 上传图片，返回 URL */
+export async function uploadImage(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = getToken()
+  const res = await fetch(`${BASE}/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  })
+  const body = await res.json()
+  if (body.code !== 0) throw new Error(body.message || '上传失败')
+  return body.data.url
+}
+
+// --- 地址管理 API ---
+
+export type Address = {
+  id: number
+  userId: number
+  name: string
+  phone: string
+  province: string
+  city: string
+  district: string
+  detail: string
+  isDefault: boolean
+}
+
+export async function listAddresses(): Promise<Address[]> {
+  return apiFetch('/addresses')
+}
+export async function createAddress(input: Omit<Address, 'id' | 'userId'>): Promise<Address> {
+  return apiFetch('/addresses', { method: 'POST', body: JSON.stringify(input) })
+}
+export async function updateAddress(id: number, input: Omit<Address, 'id' | 'userId'>): Promise<Address> {
+  return apiFetch(`/addresses/${id}`, { method: 'PUT', body: JSON.stringify(input) })
+}
+export async function deleteAddress(id: number): Promise<void> {
+  return apiFetch(`/addresses/${id}`, { method: 'DELETE' })
 }

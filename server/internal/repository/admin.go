@@ -21,6 +21,7 @@ type AdminStore interface {
 	CreateProduct(ctx context.Context, product *model.Product) error
 	ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error)
 	GetProduct(ctx context.Context, id uint64) (*model.Product, error)
+	UpdateProduct(ctx context.Context, product *model.Product) error
 	DeleteProduct(ctx context.Context, id uint64) error
 
 	CreateAuction(ctx context.Context, auction *model.Auction) error
@@ -39,7 +40,7 @@ type AdminStore interface {
 	UpdateOrder(ctx context.Context, order *model.Order) error
 	ListOrders(ctx context.Context) ([]model.Order, error)
 	ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error)
-	UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error
+	UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error
 	ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error)
 
 	// Outbox 事件队列
@@ -49,6 +50,7 @@ type AdminStore interface {
 	// 出价事务（用于 PlaceBid 的 MySQL 事务内）
 	CreateBid(ctx context.Context, bid *model.Bid) error
 	UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error
+	ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error)
 	PickPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxEventDone(ctx context.Context, id uint64) error
 	MarkOutboxEventFailed(ctx context.Context, id uint64) error
@@ -158,14 +160,38 @@ func (s *txGormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint
 func (s *txGormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error { return s.db.WithContext(ctx).Save(order).Error }
 func (s *txGormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Order("id DESC").Find(&o).Error; return o, err }
 func (s *txGormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&o).Error; return o, err }
-func (s *txGormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error {
+func (s *txGormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
 	updates := map[string]interface{}{"status": status}
 	if paidAt != nil {
 		updates["paid_at"] = paidAt
 	}
+	if addressID != nil {
+		updates["address_id"] = *addressID
+	}
+	if addressSnapshot != "" {
+		updates["address_snapshot"] = addressSnapshot
+	}
 	return s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates).Error
 }
 
+func (s *txGormAdminStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
+	var bids []model.Bid
+	query := s.db.WithContext(ctx).Where("auction_id = ? AND accepted = ?", auctionID, true).Order("amount_cents DESC, server_ts ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&bids).Error; err != nil {
+		return nil, err
+	}
+	return bids, nil
+}
+func (s *txGormAdminStore) UpdateProduct(ctx context.Context, product *model.Product) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", product.ID).Updates(map[string]interface{}{
+		"name":        product.Name,
+		"image_url":   product.ImageURL,
+		"description": product.Description,
+	}).Error
+}
 func (s *txGormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) { var a []model.Auction; err := s.db.WithContext(ctx).Where("status = ? AND end_at <= ?", "running", time.Now()).Order("id ASC").Find(&a).Error; return a, err }
 func (s *txGormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error) error { panic("nested transaction not supported") }
 
@@ -192,6 +218,25 @@ func (s *GormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Prod
 		return nil, err
 	}
 	return &product, nil
+}
+
+func (s *GormAdminStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
+	var bids []model.Bid
+	query := s.db.WithContext(ctx).Where("auction_id = ? AND accepted = ?", auctionID, true).Order("amount_cents DESC, server_ts ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&bids).Error; err != nil {
+		return nil, err
+	}
+	return bids, nil
+}
+func (s *GormAdminStore) UpdateProduct(ctx context.Context, product *model.Product) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", product.ID).Updates(map[string]interface{}{
+		"name":        product.Name,
+		"image_url":   product.ImageURL,
+		"description": product.Description,
+	}).Error
 }
 
 func (s *GormAdminStore) DeleteProduct(ctx context.Context, id uint64) error {
@@ -307,10 +352,16 @@ func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64
 	return orders, nil
 }
 
-func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error {
+func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
 	updates := map[string]interface{}{"status": status}
 	if paidAt != nil {
 		updates["paid_at"] = paidAt
+	}
+	if addressID != nil {
+		updates["address_id"] = *addressID
+	}
+	if addressSnapshot != "" {
+		updates["address_snapshot"] = addressSnapshot
 	}
 	result := s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates)
 	if result.Error != nil {

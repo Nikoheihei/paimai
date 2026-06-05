@@ -262,6 +262,15 @@ func (s *AdminService) ListAuctions(ctx context.Context, filter repository.Aucti
 	return s.store.ListAuctions(ctx, filter)
 }
 
+// ListAuctionBids 查询指定竞拍的出价历史（按金额降序）。
+func (s *AdminService) ListAuctionBids(ctx context.Context, auctionID uint64) ([]model.Bid, error) {
+	_, err := s.store.GetAuction(ctx, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.ListAuctionBids(ctx, auctionID, 50)
+}
+
 // transitionAuction 封装竞拍状态流转、取消原因写入和持久化更新。
 func (s *AdminService) transitionAuction(ctx context.Context, id uint64, event statemachine.Event, reason string) (*model.Auction, error) {
 	auction, err := s.getAuction(ctx, id)
@@ -443,6 +452,35 @@ func normalizedMode(mode string) string {
 // GetProduct 查询商品详情。
 func (s *AdminService) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
 	return s.store.GetProduct(ctx, id)
+}
+
+// UpdateProductInput 是编辑商品的输入参数。
+type UpdateProductInput struct {
+	Name        string `json:"name"`
+	ImageURL    string `json:"imageUrl"`
+	Description string `json:"description"`
+}
+
+// UpdateProduct 编辑商品信息。
+func (s *AdminService) UpdateProduct(ctx context.Context, id uint64, input UpdateProductInput) (*model.Product, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: product name is required", ErrInvalidInput)
+	}
+	product, err := s.store.GetProduct(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	product.Name = input.Name
+	product.ImageURL = strings.TrimSpace(input.ImageURL)
+	product.Description = strings.TrimSpace(input.Description)
+	if err := s.store.UpdateProduct(ctx, product); err != nil {
+		return nil, err
+	}
+	return product, nil
 }
 
 // DeleteProduct 删除商品。有关联活跃竞拍（draft/scheduled/running）时拒绝。

@@ -97,6 +97,23 @@ func (h *Hub) Unregister(client *Client) {
 	h.events <- HubEvent{Type: EventUnregister, Client: client}
 }
 
+// RoomStats 返回指定房间的实时连接统计。
+type RoomStats struct {
+	RoomID      uint64 `json:"roomId"`
+	OnlineCount int    `json:"onlineCount"`
+}
+
+// GetRoomStats 查询指定房间的 WS 连接数。
+func (h *Hub) GetRoomStats(roomID uint64) RoomStats {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	room, ok := h.rooms[roomID]
+	if !ok {
+		return RoomStats{RoomID: roomID, OnlineCount: 0}
+	}
+	return RoomStats{RoomID: roomID, OnlineCount: len(room.clients)}
+}
+
 func (h *Hub) Broadcast(roomID uint64, message []byte) {
 	h.mu.RLock()
 	room, ok := h.rooms[roomID]

@@ -165,7 +165,7 @@ func TestPayOrder(t *testing.T) {
 	svc, store := newSettleTestHarness()
 	order := seedOrder(store, "pending_payment")
 
-	paid, err := svc.PayOrder(context.Background(), order.ID)
+	paid, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
 	if err != nil {
 		t.Fatalf("pay failed: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestPayOrderAlreadyPaid(t *testing.T) {
 	order.PaidAt = &now
 	_ = store.UpdateOrder(context.Background(), order)
 
-	paid, err := svc.PayOrder(context.Background(), order.ID)
+	paid, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
 	if err != nil {
 		t.Fatalf("pay idempotent failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestPayOrderClosed(t *testing.T) {
 	svc, store := newSettleTestHarness()
 	order := seedOrder(store, "closed")
 
-	_, err := svc.PayOrder(context.Background(), order.ID)
+	_, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("expected ErrInvalidTransition, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestPayOrderClosed(t *testing.T) {
 // TestPayOrderNotFound 验证不存在的订单返回 ErrNotFound。
 func TestPayOrderNotFound(t *testing.T) {
 	svc, _ := newSettleTestHarness()
-	_, err := svc.PayOrder(context.Background(), 999)
+	_, err := svc.PayOrder(context.Background(), 999, PayOrderInput{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}

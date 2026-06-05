@@ -23,12 +23,13 @@ type AdminHandler struct {
 // RegisterAdminRoutes 注册后台管理端商品和竞拍路由。
 func RegisterAdminRoutes(r gin.IRouter, adminService *service.AdminService) {
 	h := &AdminHandler{service: adminService}
-	admin := r.Group("/api/admin")
+	admin := r
 	{
 		admin.POST("/products", h.createProduct)
 		admin.GET("/products", h.listProducts)
-		admin.GET("/products/:id", h.getProduct)
-		admin.DELETE("/products/:id", h.deleteProduct)
+	admin.GET("/products/:id", h.getProduct)
+	admin.PATCH("/products/:id", h.updateProduct)
+	admin.DELETE("/products/:id", h.deleteProduct)
 
 		admin.POST("/auctions", h.createAuction)
 		admin.GET("/auctions", h.listAuctions)
@@ -37,7 +38,7 @@ func RegisterAdminRoutes(r gin.IRouter, adminService *service.AdminService) {
 		admin.POST("/auctions/:id/start", h.startAuction)
 		admin.POST("/auctions/:id/cancel", h.cancelAuction)
 
-		admin.GET("/orders/:id", h.getOrder)
+		admin.GET("/auctions/:id/bids", h.listAuctionBids)
 	}
 }
 
@@ -139,6 +140,20 @@ func (h *AdminHandler) deleteProduct(c *gin.Context) {
 	writeResult(c, nil, err)
 }
 
+// updateProduct 编辑商品信息。
+func (h *AdminHandler) updateProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var input service.UpdateProductInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	product, err := h.service.UpdateProduct(c.Request.Context(), id, input)
+	writeResult(c, product, err)
+}
+
 // getOrder 查询订单详情。
 func (h *AdminHandler) getOrder(c *gin.Context) {
 	id, ok := pathID(c)
@@ -147,6 +162,16 @@ func (h *AdminHandler) getOrder(c *gin.Context) {
 	}
 	order, err := h.service.GetOrder(c.Request.Context(), id)
 	writeResult(c, order, err)
+}
+
+// listAuctionBids 查询指定竞拍的出价历史。
+func (h *AdminHandler) listAuctionBids(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	bids, err := h.service.ListAuctionBids(c.Request.Context(), id)
+	writeResult(c, bids, err)
 }
 
 // cancelAuction 处理主播或商家的异常取消竞拍请求。

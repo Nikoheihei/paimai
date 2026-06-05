@@ -12,19 +12,24 @@
 import { useState, useEffect, useCallback } from 'react'
 import LoginPage from './pages/LoginPage'
 import RoomListPage from './pages/RoomListPage'
-import RoomPage from './pages/RoomPage'
+import LiveRoomPage from './pages/LiveRoomPage'
+import AuctionDetailPage from './pages/AuctionDetailPage'
 import OrderPage from './pages/OrderPage'
+import AddressListPage from './pages/AddressListPage'
+import ErrorBoundary from './components/ErrorBoundary'
 import { isLoggedIn, clearToken } from './api/client'
 import './App.css'
 
-type Route = { page: string; roomId?: number }
+type Route = { page: string; roomId?: number; auctionId?: number }
 
 function parseHash(): Route {
   const hash = window.location.hash.slice(1)
   if (!hash || hash === '/') return { page: 'rooms' }
   const parts = hash.split('/').filter(Boolean)
   if (parts[0] === 'rooms' && parts[1]) return { page: 'room', roomId: parseInt(parts[1]) }
+  if (parts[0] === 'auctions' && parts[1]) return { page: 'auction', auctionId: parseInt(parts[1]) }
   if (parts[0] === 'orders') return { page: 'orders' }
+  if (parts[0] === 'address') return { page: 'address' }
   return { page: 'rooms' }
 }
 
@@ -62,17 +67,22 @@ function App() {
 
   return (
     <div className="app">
-      {showNav && (
-        <nav className="h5-nav">
-          <a href="#/" className={navActive('rooms')}>首页</a>
-          <a href="#/orders" className={navActive('orders')}>我的订单</a>
-          <button className="logout-link" onClick={handleLogout}>退出</button>
-        </nav>
-      )}
+      <ErrorBoundary>
+        {showNav && (
+          <nav className="h5-nav">
+            <a href="#/" className={navActive('rooms')}>首页</a>
+            <a href="#/orders" className={navActive('orders')}>我的订单</a>
+            <a href="#/address" className={navActive('address')}>地址</a>
+            <button className="logout-link" onClick={handleLogout}>退出</button>
+          </nav>
+        )}
 
-      {route.page === 'rooms' && <RoomListPage />}
-      {route.page === 'room' && <RoomPage roomId={route.roomId!} onBack={() => window.location.hash = '#/'} />}
-      {route.page === 'orders' && <OrderPage />}
+        {route.page === 'rooms' && <RoomListPage />}
+        {route.page === 'room' && <LiveRoomPage roomId={route.roomId!} onBack={() => window.location.hash = '#/'} />}
+        {route.page === 'auction' && <AuctionDetailPage auctionId={route.auctionId!} onBack={() => window.location.hash = '#/'} />}
+        {route.page === 'orders' && <OrderPage />}
+        {route.page === 'address' && <AddressListPage />}
+      </ErrorBoundary>
     </div>
   )
 }

@@ -189,3 +189,6 @@ Redis Stream ──→ C1/C2/C3     Kafka ──→ C1/C2/C3
 
 *本文档与 `docs/implementation-plan.md` 的产线追踪保持同步。*
 *架构变更需更新本文档并记录到 `docs/rules/deviations-log.md`。*
+
+注意点：
+未来一定要演变成cdc+kafka的架构吗？考虑是否架构过重。

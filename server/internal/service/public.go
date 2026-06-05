@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"log"
@@ -96,8 +97,15 @@ func (s *PublicService) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, er
 	return s.store.ListLiveRooms(ctx)
 }
 
-// GetRoom 查询单个直播间的详情。
-func (s *PublicService) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
+// RoomDetail 是直播间详情，包含主播信息。
+type RoomDetail struct {
+	model.LiveRoom
+	AnchorNickname string `json:"anchorNickname"`
+	AnchorAvatar   string `json:"anchorAvatar"`
+}
+
+// GetRoom 查询单个直播间的详情，同时返回主播信息。
+func (s *PublicService) GetRoom(ctx context.Context, id uint64) (*RoomDetail, error) {
 	if id == 0 {
 		return nil, fmt.Errorf("%w: roomId is required", ErrInvalidInput)
 	}
@@ -108,7 +116,13 @@ func (s *PublicService) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom
 		}
 		return nil, err
 	}
-	return room, nil
+	detail := &RoomDetail{LiveRoom: *room}
+	user, err := s.store.GetUser(ctx, room.SellerID)
+	if err == nil && user != nil {
+		detail.AnchorNickname = user.Nickname
+		detail.AnchorAvatar = user.AvatarURL
+	}
+	return detail, nil
 }
 
 // GetAuction 查询单个竞拍的详情。
@@ -119,12 +133,33 @@ func (s *PublicService) GetAuction(ctx context.Context, id uint64) (*model.Aucti
 	return s.store.GetAuction(ctx, id)
 }
 
-// ListRoomAuctions 查询指定直播间的竞拍列表，可按状态过滤。
-func (s *PublicService) ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]model.Auction, error) {
+// AuctionWithProduct 是包含商品信息的竞拍。
+type AuctionWithProduct struct {
+	model.Auction
+	ProductName  string `json:"productName"`
+	ProductImage string `json:"productImage"`
+}
+
+// ListRoomAuctions 查询指定直播间的竞拍列表，可按状态过滤，同时填充商品信息。
+func (s *PublicService) ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]AuctionWithProduct, error) {
 	if roomID == 0 {
 		return nil, fmt.Errorf("%w: roomId is required", ErrInvalidInput)
 	}
-	return s.store.ListRoomAuctions(ctx, roomID, status)
+	auctions, err := s.store.ListRoomAuctions(ctx, roomID, status)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AuctionWithProduct, 0, len(auctions))
+	for _, a := range auctions {
+		awp := AuctionWithProduct{Auction: a}
+		product, perr := s.store.GetProduct(ctx, a.ProductID)
+		if perr == nil && product != nil {
+			awp.ProductName = product.Name
+			awp.ProductImage = product.ImageURL
+		}
+		result = append(result, awp)
+	}
+	return result, nil
 }
 
 // GetRanking 获取指定竞拍的排行榜，优先从 Redis ZSET 读取，回退到数据库。
@@ -162,14 +197,33 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 	}
 
 	now := s.now()
+	idemKey := fmt.Sprintf("idem:%d:%s", auctionID, md5Hash(input.IdempotencyKey))
+	inflightKey := fmt.Sprintf("idem_inflight:%d:%s", auctionID, md5Hash(input.IdempotencyKey))
 
-	// ① Redis Lua 预校验：金额合法性、封顶价、频率、状态等
+	// ① Redis Lua 预校验：幂等/cache/in-flight → 频率 → 金额校验
 	// 不做任何状态写入，失败时快速拒绝。
 	if s.redis != nil && s.redis.Master != nil {
 		luaResult, err := runBidLiteScript(ctx, s.redis.Master, auctionID, input, now)
 		if err != nil {
 			return nil, err
 		}
+
+		// 幂等缓存命中 → 从 Redis 读取完整响应并返回
+		if luaResult.code == "IDEMPOTENT_REPLAY" {
+			return s.readCachedBidResult(ctx, idemKey, auctionID, input.UserID), nil
+		}
+
+		// ② inflight 锁（Go 层 SETNX，30s TTL）：防止同一幂等键并发处理
+		set, err := s.redis.Master.SetNX(ctx, inflightKey, "1", 30*time.Second).Result()
+		if err != nil || !set {
+			return &BidResult{
+				Accepted: false,
+				AuctionID: auctionID,
+				UserID:   input.UserID,
+				Status:   "IN_FLIGHT",
+			}, &BidRejectError{Code: "IN_FLIGHT", Message: bidRejectMessage("IN_FLIGHT")}
+		}
+
 		if !luaResult.accepted {
 			return luaResult.toBidResult(auctionID, input.UserID),
 				&BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
@@ -240,11 +294,27 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		if err := tx.CreateBid(ctx, bid); err != nil {
 			// 唯一索引冲突 → 幂等重放
 			if strings.Contains(err.Error(), "Duplicate") || strings.Contains(err.Error(), "UNIQUE") {
-				result = &BidResult{Accepted: true, IdempotentReplay: true}
+				result = s.assembleDuplicateBidResult(tx, ctx, auctionID, input, auction)
+				// 缓存完整结果到 Redis（之后同 key 走 Lua cache 路径）
+				if s.redis != nil && s.redis.Master != nil {
+					resultJSON, _ := json.Marshal(result)
+					pipe := s.redis.Master.Pipeline()
+					pipe.Set(ctx, idemKey, string(resultJSON), 86400*time.Second)
+					pipe.Del(ctx, inflightKey)
+					rankingKey := fmt.Sprintf("auction:%d:bids", auctionID)
+					pipe.ZAdd(ctx, rankingKey, goredis.Z{
+						Score:  float64(result.CurrentPriceCents),
+						Member: strconv.FormatUint(result.UserID, 10),
+					})
+					pipe.Exec(ctx)
+				}
 				return nil
 			}
 			return err
 		}
+
+		// 首次出价成功：in-flight 标记在 Lua 中已写入，缓存由事务完成后异步写入
+		// （见 PlaceBid 末尾的 deferred goroutine）
 
 		// 更新竞拍状态
 		auction.CurrentPriceCents = newPrice
@@ -279,7 +349,9 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		}
 
 		// 构造结果
-		result = &BidResult{
+		// 缓存最终响应到 Redis 并返回
+	// 此文本会在外部被替换 — 这里先标记位置
+	result = &BidResult{
 			Accepted:          true,
 			AuctionID:         auctionID,
 			UserID:            input.UserID,
@@ -308,7 +380,29 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		return result, nil
 	}
 
-	// ③ 同步结算（触顶成交 — 带 2 次重试）
+	// ③ 缓存完整响应到 Redis（24h TTL，覆盖 in-flight 标记）
+	if s.redis != nil && s.redis.Master != nil {
+		go func() {
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				return
+			}
+			pipe := s.redis.Master.Pipeline()
+			pipe.Set(cacheCtx, idemKey, string(resultJSON), 86400*time.Second)
+			pipe.Del(cacheCtx, inflightKey)
+			// ZADD ranking（幂等写：同 Score 同 Member 多次调用结果一致）
+			rankingKey := fmt.Sprintf("auction:%d:bids", auctionID)
+			pipe.ZAdd(cacheCtx, rankingKey, goredis.Z{
+				Score:  float64(result.CurrentPriceCents),
+				Member: strconv.FormatUint(result.UserID, 10),
+			})
+			pipe.Exec(cacheCtx)
+		}()
+	}
+
+	// ④ 同步结算（触顶成交 — 带 2 次重试）
 	if result.Sold && s.settle != nil {
 		go settleWithRetry(context.Background(), auctionID, s.settle, 2)
 	}
@@ -409,6 +503,10 @@ func validateBidInput(auctionID uint64, input BidInput) error {
 // bidRejectMessage 返回拒绝码对应的中文提示。
 func bidRejectMessage(code string) string {
 	switch code {
+	case "IDEMPOTENT_REPLAY":
+		return "" // 幂等重放不视为错误
+	case "IN_FLIGHT":
+		return "出价正在处理中，请重试"
 	case "AUCTION_NOT_RUNNING":
 		return "竞拍未在进行中"
 	case "AUCTION_ENDED":
@@ -439,6 +537,7 @@ type bidLuaResult struct {
 	sold              bool
 	reserveMet        bool
 	tooFrequent       bool
+	idempotentReplay  bool
 	code              string
 }
 
@@ -471,6 +570,8 @@ func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64,
 // bidLiteScript 只做预校验的 Lua 脚本，不写入任何 Redis 状态。
 var bidLiteScript = goredis.NewScript(`
 local stateKey = KEYS[1]
+local idemKey = KEYS[2]
+
 local userId = ARGV[1]
 local amount = tonumber(ARGV[2])
 local nowMs = tonumber(ARGV[3])
@@ -480,11 +581,23 @@ if not status then
   return {0, 0, 0, "", 0, 0, 0, 0, 0, "AUCTION_CACHE_MISSING"}
 end
 
+
+-- ① 幂等缓存检查（长 TTL 24h）：完整响应已缓存 → 直接返回
+local cachedJson = redis.call("GET", idemKey)
+if cachedJson then
+  return {1, 0, 0, "", 0, 0, 0, 0, 0, "IDEMPOTENT_REPLAY"}
+end
+
+
+
 local current = tonumber(redis.call("HGET", stateKey, "currentPriceCents") or "0")
 local endAt = tonumber(redis.call("HGET", stateKey, "endAtUnixMilli") or "0")
 
--- 频率检查
-local lastBidKey = KEYS[2]
+-- ② 频率检查（幂等检查之后，幂等重放不走此路径）
+-- 频率检查：key 为 (userId + idempotencyKey hash)，同一 key 不触发频率拦截
+-- 幂等重放（同 key）在前面的 EXISTS 检查中已处理，不会走到此处
+-- 不同 key 的连续出价才需要频率限制
+local lastBidKey = KEYS[3]
 local minIntervalMs = 1000
 local lastTs = redis.call("GET", lastBidKey)
 if lastTs and tonumber(lastTs) + minIntervalMs > nowMs then
@@ -528,8 +641,9 @@ return {1, finalAmount, current, "running", endAt, extended, sold, 0, 0, "OK"}
 func runBidLiteScript(ctx context.Context, client *goredis.Client, auctionID uint64, input BidInput, now time.Time) (bidLuaResult, error) {
 	stateKey := fmt.Sprintf("auction:%d:state", auctionID)
 	lastBidTsKey := fmt.Sprintf("auction:%d:last_bid_ts:%d", auctionID, input.UserID)
+	idemKey := fmt.Sprintf("idem:%d:%s", auctionID, md5Hash(input.IdempotencyKey))
 
-	raw, err := bidLiteScript.Run(ctx, client, []string{stateKey, lastBidTsKey},
+	raw, err := bidLiteScript.Run(ctx, client, []string{stateKey, idemKey, lastBidTsKey},
 		strconv.FormatUint(input.UserID, 10),
 		strconv.FormatInt(input.AmountCents, 10),
 		strconv.FormatInt(now.UnixMilli(), 10),
@@ -553,6 +667,7 @@ func runBidLiteScript(ctx context.Context, client *goredis.Client, auctionID uin
 		sold:              luaInt(values[6]) == 1,
 		reserveMet:        luaInt(values[7]) == 1,
 		tooFrequent:       luaInt(values[8]) == 1,
+		idempotentReplay:  luaString(values[9]) == "IDEMPOTENT_REPLAY",
 		code:              luaString(values[9]),
 	}
 	return result, nil
@@ -584,12 +699,89 @@ func luaString(value interface{}) string {
 	return ""
 }
 
+// readCachedBidResult 从 Redis 读取缓存的完整出价响应并返回。
+// 缓存 miss 时降级返回一个轻量幂等确认。
+func (s *PublicService) readCachedBidResult(ctx context.Context, idemKey string, auctionID, userID uint64) *BidResult {
+	cached, err := s.redis.Master.Get(ctx, idemKey).Result()
+	if err != nil || cached == "" {
+		// 缓存失效 → 降级返回简化的幂等确认
+		return &BidResult{
+			Accepted:         true,
+			IdempotentReplay: true,
+			AuctionID:        auctionID,
+			UserID:           userID,
+		}
+	}
+
+	var cachedResult BidResult
+	if err := json.Unmarshal([]byte(cached), &cachedResult); err != nil {
+		return &BidResult{
+			Accepted:         true,
+			IdempotentReplay: true,
+			AuctionID:        auctionID,
+			UserID:           userID,
+		}
+	}
+
+	cachedResult.IdempotentReplay = true
+	return &cachedResult
+}
+// assembleDuplicateBidResult 在唯一索引冲突时查询 MySQL 已有的出价记录，
+// 拼装完整 BidResult 供缓存和返回。
+func (s *PublicService) assembleDuplicateBidResult(tx repository.AdminStore, ctx context.Context, auctionID uint64, input BidInput, auction *model.Auction) *BidResult {
+	// 查出现有出价记录以获取真实金额
+	bids, err := tx.ListAuctionBids(ctx, auctionID, 50)
+	if err != nil || len(bids) == 0 {
+		// 降级：用 input 中的金额
+		return &BidResult{
+			Accepted:         true,
+			IdempotentReplay: true,
+			AuctionID:        auctionID,
+			UserID:           input.UserID,
+			AmountCents:      input.AmountCents,
+			CurrentPriceCents: auction.CurrentPriceCents,
+			Status:           auction.Status,
+			EndAt:            auction.EndAt.Format(time.RFC3339Nano),
+		}
+	}
+
+	// 找到匹配 idempotencyKey 的出价
+	var existingBid *model.Bid
+	for i := range bids {
+		if bids[i].IdempotencyKey == input.IdempotencyKey {
+			existingBid = &bids[i]
+			break
+		}
+	}
+
+	amount := input.AmountCents
+	if existingBid != nil {
+		amount = existingBid.AmountCents
+	}
+
+	return &BidResult{
+		Accepted:         true,
+		IdempotentReplay: true,
+		AuctionID:        auctionID,
+		UserID:           input.UserID,
+		AmountCents:      amount,
+		CurrentPriceCents: auction.CurrentPriceCents,
+		Status:           auction.Status,
+		EndAt:             auction.EndAt.Format(time.RFC3339Nano),
+	}
+}
 // formatEndAt 格式化结束时间为 RFC3339Nano 字符串。
 func formatEndAt(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
 	return t.Format(time.RFC3339Nano)
+}
+
+// md5Hash 计算字符串的 MD5 十六进制摘要，用于生成等幂 key。
+func md5Hash(s string) string {
+	h := md5.Sum([]byte(s))
+	return fmt.Sprintf("%x", h)
 }
 
 // settleWithRetry 执行结算并带指定次数重试。
@@ -651,7 +843,7 @@ func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64, userI
 	if order.BuyerID != userID {
 		return nil, fmt.Errorf("%w: order does not belong to user", ErrNotFound)
 	}
-	return s.settle.PayOrder(ctx, orderID)
+	return s.settle.PayOrder(ctx, orderID, PayOrderInput{})
 }
 
 // uuid 生成一个简单的 v4 风格 UUID（无横线，32 位 hex），用于事件去重。

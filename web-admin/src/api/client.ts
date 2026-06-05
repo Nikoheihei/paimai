@@ -76,8 +76,17 @@ export async function createProduct(name: string, imageUrl?: string, description
 export async function listProducts(): Promise<Product[]> {
   return apiFetch('/admin/products')
 }
+export async function updateProduct(id: number, name: string, imageUrl?: string, description?: string): Promise<Product> {
+  return apiFetch(`/admin/products/${id}`, { method: 'PATCH', body: JSON.stringify({ name, imageUrl: imageUrl || '', description: description || '' }) })
+}
 export async function deleteProduct(id: number): Promise<void> {
   return apiFetch(`/admin/products/${id}`, { method: 'DELETE' })
+}
+export async function listAuctionBids(auctionId: number): Promise<{ id: number; auctionId: number; userId: number; amountCents: number; accepted: boolean; createdAt: string }[]> {
+  return apiFetch(`/admin/auctions/${auctionId}/bids`)
+}
+export async function getRoomStats(roomId: number): Promise<{ roomId: number; onlineCount: number }> {
+  return apiFetch(`/admin/rooms/${roomId}/stats`)
 }
 
 export type Auction = { id: number; roomId: number; productId: number; mode: string; startPriceCents: number; currentPriceCents: number; bidIncrementCents: number; capPriceCents: number; reservePriceCents: number | null; startAt: string; endAt: string; status: string; winnerUserId: number | null }
@@ -113,4 +122,19 @@ export async function getOrderDetail(id: number): Promise<Order> {
 }
 export async function payOrder(id: number): Promise<Order> {
   return apiFetch(`/admin/orders/${id}/pay`, { method: 'POST' })
+}
+
+/** 上传图片，返回 URL */
+export async function uploadImage(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = getToken()
+  const res = await fetch(`${BASE}/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  })
+  const body = await res.json()
+  if (body.code !== 0) throw new Error(body.message || '上传失败')
+  return body.data.url
 }

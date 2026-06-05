@@ -230,3 +230,158 @@ section { margin-bottom: 28px; }
 .switch { text-align: center; font-size: 13px; color: #888; margin-top: 12px; }
 .link { background: none; border: none; color: #ff6b35; cursor: pointer; font-size: 13px; text-decoration: underline; }
 .link:hover { color: #e55a25; }
+
+/* ========== Admin Tab 切换 ========== */
+.tab-bar {
+  display: flex; gap: 0;
+  background: #fff; border-radius: 10px; padding: 4px;
+  margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.tab-btn {
+  flex: 1; padding: 10px 16px; border: none; border-radius: 8px;
+  font-size: 14px; font-weight: 600; color: #666; cursor: pointer;
+  transition: all .15s; background: transparent;
+}
+.tab-btn:hover { background: #f5f5f5; }
+.tab-btn.active { background: #ff6b35; color: #fff; }
+
+/* ========== 状态徽章（Admin 端） ========== */
+.status-badge.admin-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
+}
+.badge-gray   { background: #f0f0f0; color: #666; }
+.badge-blue    { background: #e3f2fd; color: #1976d2; }
+.badge-red     { background: #ffebee; color: #c62828; }
+.badge-green   { background: #e8f5e9; color: #2e7d32; }
+.badge-orange  { background: #fff3e0; color: #e65100; }
+
+/* ========== 数据表格 ========== */
+.data-table {
+  width: 100%; border-collapse: collapse; background: #fff;
+  border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.data-table thead { background: #fafafa; }
+.data-table th {
+  padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600;
+  color: #666; border-bottom: 1px solid #eee;
+}
+.data-table td {
+  padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #f5f5f5;
+  vertical-align: middle;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover { background: #fafafa; }
+
+.thumb-img { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: #f5f5f5; }
+.no-thumb { width: 48px; height: 48px; border-radius: 6px; background: #eee; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; color: #999; }
+.desc-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #888; font-size: 13px; }
+.action-cell { display: flex; gap: 6px; white-space: nowrap; }
+
+/* ========== 创建表单卡片 ========== */
+.create-form-card {
+  background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.create-form-card h3 { font-size: 17px; margin-bottom: 16px; color: #333; }
+.form-grid-2col {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.create-form-card textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px;
+  font-size: 14px; outline: none; resize: vertical; font-family: inherit;
+}
+.create-form-card textarea:focus { border-color: #ff6b35; }
+.create-form-card .field select {
+  width: 100%;
+}
+
+/* ========== 筛选栏 ========== */
+.filter-bar {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;
+}
+.filter-input, .filter-select, .filter-date {
+  padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none;
+}
+.filter-input { flex: 1; min-width: 160px; }
+.filter-select { min-width: 120px; }
+.filter-date { min-width: 130px; }
+
+/* ========== Dashboard 统计卡片 ========== */
+.dashboard-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px;
+}
+.stat-card {
+  background: #fff; border-radius: 12px; padding: 20px; text-align: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06); transition: transform .15s;
+}
+.stat-card:hover { transform: translateY(-2px); }
+.stat-icon { font-size: 28px; width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; }
+.stat-value { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+.stat-label { font-size: 13px; color: #888; }
+
+/* ========== Dashboard 快捷操作 ========== */
+.dashboard-actions {
+  display: flex; gap: 10px; margin-bottom: 24px;
+}
+
+/* ========== 批量操作栏 ========== */
+.batch-bar {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 8px 12px;
+  background: #fafafa; border-radius: 8px;
+}
+.batch-check { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #666; cursor: pointer; }
+
+/* ========== 空状态（带图标） ========== */
+.empty-state-box {
+  text-align: center; padding: 48px 20px; color: #999;
+}
+.empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state-box .sub { font-size: 13px; color: #bbb; margin-top: 4px; }
+
+/* ========== 分页 ========== */
+.pagination {
+  display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 20px;
+}
+
+/* ========== 弹窗覆盖层 ========== */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-card {
+  background: #fff; border-radius: 16px; width: 100%; max-width: 440px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15); overflow: hidden;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
+}
+.modal-header h3 { font-size: 16px; }
+.modal-close {
+  background: none; border: none; font-size: 22px; color: #999; cursor: pointer; line-height: 1;
+}
+.modal-close:hover { color: #333; }
+.modal-body { padding: 16px 20px; }
+.modal-body .info-row {
+  display: flex; justify-content: space-between; padding: 8px 0;
+  border-bottom: 1px solid #f5f5f5; font-size: 14px;
+}
+.modal-body .info-row:last-child { border-bottom: none; }
+.modal-body .price { color: #ff6b35; font-weight: 700; font-size: 16px; }
+.modal-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 12px 20px 16px; border-top: 1px solid #f0f0f0;
+}
+
+/* ========== Admin 图片上传器 ========== */
+.admin-image-uploader {
+  border: 2px dashed #ddd; border-radius: 10px; padding: 20px;
+  text-align: center; cursor: pointer; transition: all .15s;
+  position: relative; overflow: hidden;
+}
+.admin-image-uploader:hover { border-color: #ff6b35; background: #fffbfa; }
+.admin-image-uploader.dragging { border-color: #ff6b35; background: #fff8f5; }
+.aiu-placeholder { color: #999; font-size: 13px; }
+.aiu-preview-wrap { text-align: center; }
+.aiu-preview { max-width: 200px; max-height: 160px; object-fit: contain; border-radius: 8px; margin-bottom: 8px; }
+.aiu-actions { display: flex; gap: 8px; justify-content: center; }

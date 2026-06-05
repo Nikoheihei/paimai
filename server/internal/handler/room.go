@@ -4,24 +4,26 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"paimai/internal/service"
+	"paimai/internal/websocket"
 )
 
 // RoomHandler 负责直播间管理的 HTTP 协议适配。
 type RoomHandler struct {
 	roomService *service.RoomService
+	hub         *websocket.Hub
 }
 
 // RegisterRoomRoutes 注册直播间管理路由（需鉴权）。
-func RegisterRoomRoutes(r gin.IRouter, roomService *service.RoomService) {
-	h := &RoomHandler{roomService: roomService}
-	admin := r.Group("/api/admin")
+func RegisterRoomRoutes(r gin.IRouter, roomService *service.RoomService, hub *websocket.Hub) {
+	h := &RoomHandler{roomService: roomService, hub: hub}
 	{
-		admin.POST("/rooms", h.createRoom)
-		admin.GET("/rooms", h.listRooms)
-		admin.GET("/rooms/:id", h.getRoom)
-		admin.PATCH("/rooms/:id", h.updateRoom)
-		admin.POST("/rooms/:id/live", h.goLive)
-		admin.POST("/rooms/:id/close", h.closeRoom)
+		r.POST("/rooms", h.createRoom)
+		r.GET("/rooms", h.listRooms)
+		r.GET("/rooms/:id", h.getRoom)
+		r.PATCH("/rooms/:id", h.updateRoom)
+		r.POST("/rooms/:id/live", h.goLive)
+		r.POST("/rooms/:id/close", h.closeRoom)
+		r.GET("/rooms/:id/stats", h.getRoomStats)
 	}
 }
 
@@ -77,4 +79,13 @@ func (h *RoomHandler) closeRoom(c *gin.Context) {
 	}
 	result, err := h.roomService.CloseRoom(c.Request.Context(), id)
 	writeResult(c, result, err)
+}
+
+func (h *RoomHandler) getRoomStats(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	stats := h.hub.GetRoomStats(id)
+	writeResult(c, stats, nil)
 }

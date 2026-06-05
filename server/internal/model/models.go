@@ -90,6 +90,8 @@ type Order struct {
 	SellerID        uint64     `gorm:"not null" json:"sellerId"`
 	FinalPriceCents int64      `gorm:"not null" json:"finalPriceCents"`
 	Status          string     `gorm:"type:enum('pending_payment','paid','closed');default:'pending_payment';not null" json:"status"`
+	AddressID       *uint64    `gorm:"default:null" json:"addressId"`
+	AddressSnapshot string     `gorm:"type:text" json:"addressSnapshot"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	PaidAt          *time.Time `gorm:"default:null" json:"paidAt"`
 }

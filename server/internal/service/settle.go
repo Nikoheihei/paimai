@@ -150,9 +150,15 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 	return result, nil
 }
 
-// PayOrder 模拟支付——直接将订单状态从 pending_payment 设为 paid。
+// PayOrderInput 是支付订单的输入参数。
+type PayOrderInput struct {
+	AddressID       *uint64 `json:"addressId"`
+	AddressSnapshot string  `json:"addressSnapshot"`
+}
+
+// PayOrder 模拟支付——直接将订单状态从 pending_payment 设为 paid，并记录收货地址。
 // 幂等：已支付的订单直接返回成功。
-func (s *SettleService) PayOrder(ctx context.Context, orderID uint64) (*model.Order, error) {
+func (s *SettleService) PayOrder(ctx context.Context, orderID uint64, input PayOrderInput) (*model.Order, error) {
 	order, err := s.adminStore.GetOrder(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -168,7 +174,7 @@ func (s *SettleService) PayOrder(ctx context.Context, orderID uint64) (*model.Or
 
 	// 条件更新：只有 pending_payment 才能转为 paid
 	now := s.now()
-	if err := s.adminStore.UpdateOrderStatus(ctx, orderID, "paid", &now); err != nil {
+	if err := s.adminStore.UpdateOrderStatus(ctx, orderID, "paid", &now, input.AddressID, input.AddressSnapshot); err != nil {
 		// RowsAffected=0 或 status 不匹配 → 重新读取确认真实状态
 		refreshed, refreshErr := s.adminStore.GetOrder(ctx, orderID)
 		if refreshErr == nil {
@@ -184,6 +190,24 @@ func (s *SettleService) PayOrder(ctx context.Context, orderID uint64) (*model.Or
 
 	order.Status = "paid"
 	order.PaidAt = &now
+	if input.AddressID != nil {
+		order.AddressID = input.AddressID
+	}
+	if input.AddressSnapshot != "" {
+		order.AddressSnapshot = input.AddressSnapshot
+	}
+	return order, nil
+}
+
+// GetOrder 查询订单详情。
+func (s *SettleService) GetOrder(ctx context.Context, orderID uint64) (*model.Order, error) {
+	order, err := s.adminStore.GetOrder(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
 	return order, nil
 }
 

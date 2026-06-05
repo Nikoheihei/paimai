@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -86,7 +87,13 @@ func main() {
 		settleService := service.NewSettleService(adminStore)
 		roomService := service.NewRoomService(adminStore, settleService)
 
-		// 所有 API 路由挂载鉴权中间件（认证路由和 ping 已在前面注册）
+		// 用户端公开路由（无鉴权，在前端首页访问前注册）
+		publicStore := repository.NewGormPublicStore(database)
+		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
+		upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: cfg.AllowAllWebSocketOrigins}
+		handler.RegisterPublicRoutes(r, publicService, hub, upgraderCfg)
+
+		// 所有 API 路由挂载鉴权中间件（认证路由、ping、公开路由已在前面注册）
 		r.Use(middleware.AuthRequired())
 
 		// 以下路由都需要鉴权
@@ -95,20 +102,27 @@ func main() {
 		adminGroup.Use(middleware.AdminRequired())
 		handler.RegisterAdminRoutes(adminGroup, adminService)
 		handler.RegisterAdminSettleRoutes(adminGroup, settleService)
-		handler.RegisterRoomRoutes(adminGroup, roomService)
+		handler.RegisterRoomRoutes(adminGroup, roomService, hub)
 
+		handler.RegisterUploadRoutes(r)
 		handler.RegisterAuthMeRoute(r, authService)
+		handler.RegisterAddressRoutes(r.Group("/api"))
 
-		// 用户端服务（出价、排行榜、直播间）
-		publicStore := repository.NewGormPublicStore(database)
-		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
-		upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: cfg.AllowAllWebSocketOrigins}
-		handler.RegisterPublicRoutes(r, publicService, hub, upgraderCfg)
-
-		// 启动时结算已过期的 running 竞拍
+// 启动时结算已过期的 running 竞拍
 		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 			log.Printf("启动时结算了 %d 个过期竞拍", count)
 		}
+
+		// 定时结算过期竞拍（每 10 秒）
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
+					log.Printf("定时结算了 %d 个过期竞拍", count)
+				}
+			}
+		}()
 	}
 
 	// 6. 启动服务

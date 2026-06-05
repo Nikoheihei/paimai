@@ -89,6 +89,9 @@ func (s *mockAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) e
 	return nil
 }
 
+func (s *mockAdminStore) UpdateProduct(_ context.Context, product *model.Product) error { return nil }
+func (s *mockAdminStore) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) { return nil, nil }
+
 // 实现 AdminStore 其他必须方法（最小 stub）
 func (s *mockAdminStore) CreateProduct(ctx context.Context, product *model.Product) error { return nil }
 func (s *mockAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) { return nil, nil }
@@ -108,7 +111,7 @@ func (s *mockAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64
 func (s *mockAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error { return nil }
 func (s *mockAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) { return nil, nil }
 func (s *mockAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) { return nil, nil }
-func (s *mockAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time) error { return nil }
+func (s *mockAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error { return nil }
 func (s *mockAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) { return nil, nil }
 func (s *mockAdminStore) WithTx(ctx context.Context, fn func(repository.AdminStore) error) error { return fn(s) }
 func (s *mockAdminStore) CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error { return nil }

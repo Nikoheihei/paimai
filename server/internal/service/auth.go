@@ -35,6 +35,7 @@ type RegisterInput struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Nickname string `json:"nickname"`
+	Role     string `json:"role"` // user / seller / anchor，默认 user
 }
 
 // LoginInput 是登录请求的输入参数。
@@ -100,9 +101,13 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*AuthR
 	// 事务：创建 User（社交资料）+ UserAuth（认证信息）
 	var user *model.User
 	if err := s.store.WithTx(ctx, func(tx repository.AuthStore) error {
+		role := input.Role
+		if role == "" {
+			role = "buyer"
+		}
 		u := &model.User{
 			Nickname: nickname,
-			Role:     "buyer",
+			Role:     role,
 		}
 		if err := tx.CreateUser(ctx, u); err != nil {
 			return err

@@ -204,7 +204,7 @@ func (s *adminStoreStub) ListOrdersBySeller(_ context.Context, sellerID uint64) 
 	return orders, nil
 }
 
-func (s *adminStoreStub) UpdateOrderStatus(_ context.Context, id uint64, status string, paidAt *time.Time) error {
+func (s *adminStoreStub) UpdateOrderStatus(_ context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
 	order, ok := s.orders[id]
 	if !ok {
 		return gorm.ErrRecordNotFound
@@ -266,6 +266,14 @@ func (s *adminStoreStub) MarkOutboxEventDone(_ context.Context, id uint64) error
 
 func (s *adminStoreStub) MarkOutboxEventFailed(_ context.Context, id uint64) error {
 	return nil
+}
+
+func (s *adminStoreStub) UpdateProduct(_ context.Context, product *model.Product) error {
+	return nil
+}
+
+func (s *adminStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
+	return nil, nil
 }
 
 
