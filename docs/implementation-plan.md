@@ -1103,3 +1103,4 @@ gantt
 | 203 | 高可用 & 压测 | P2 | k6/Artillery 压测脚本、并发场景下出价一致性验证、压测报告 |
 | 204 | 订单售后流程 | P3 | 退款、取消订单、申诉 |
 | 205 | JWT 统一鉴权到 WebSocket | P3 | WS 连接改用 JWT token 认证，替换 query 参数 userId |
+

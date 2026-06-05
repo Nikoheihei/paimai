@@ -54,3 +54,63 @@ for (const id of ids) { try { await deleteProduct(id) } catch {} }
 - H5 OrderPage：Tab切换+支付流程+地址选择弹窗 ✅
 - H5 AddressListPage：CRUD+默认地址+localStorage ✅
 - H5 App.tsx：路由结构正确 ✅
+
+
+
+## 2026-06-05：服务端时间权威化 + UpdateAuction 缺字段修复
+
+### 问题诊断过程
+
+**E2E 从最初 1/45 逐步爬到 41/43，但 Phase 4（竞拍到期结算）始终失败**，表现为：
+- 竞拍 endAt 已过，但 status 仍为 `running`
+- 买家订单数为 0
+
+排查链路：
+
+1. **怀疑定时器没跑** → 加无条件的 `log.Printf` 诊断，确认每 3s tick 一次 ✅
+2. **怀疑 `ListRunningExpiredAuctions` SQL 有问题** → 查 MySQL，发现竞拍 `end_at` 离当前时间还有 4 分钟
+3. **E2E 明明传了 `durationSec: 10`** → 追 `StartAuction` 服务层代码，确认 `auction.EndAt = now.Add(10s)` ✅
+4. **追到 `UpdateAuction` 的 GORM `Updates` map** → 发现只更新了 `status`、`cancel_reason`、`version`，**没有 `end_at`、`start_at`**
+
+根因：`StartAuction` 在内存里把 `EndAt` 设对了，但 `UpdateAuction` 持久化时丢掉了这个字段。数据库里留的是 `CreateAuction` 时给的值（`startAt + 5分钟`），所以竞拍实际 5 分钟后才过期，定时器永远查不到。
+
+### 修复
+
+`server/internal/repository/admin.go` — 两个 `UpdateAuction` 实现（`GormAdminStore` 和 `txGormAdminStore`）的 `Updates` map 补齐了：
+
+```go
+"start_at":            auction.StartAt,
+"end_at":              auction.EndAt,
+"current_price_cents": auction.CurrentPriceCents,
+"winner_user_id":      auction.WinnerUserID,
+```
+
+### 前端服务端时间偏移
+
+倒计时原先直接用 `Date.now()`，客户端时钟偏差会导致 UI 不准确。改为：
+
+- 新增 `GET /api/server-time` → `web-h5/src/utils/serverTime.ts`
+- `Countdown.tsx` 改用 `serverNow()` = `Date.now() + offset`
+- `App.tsx` 入口处 `syncServerTime()` 获取偏移量，用网络收发包中间点消除单向延迟
+
+### 人工决策点
+
+- **定时器频率**：3s（开发阶段，后续可按需调整）
+- **serverTime 端点**：挂在 `/api/server-time`，公开路由（无需鉴权）
+
+### E2E 结果
+
+**1/45 → 42/43**。剩余 1 个失败（订单数 0）是 settle 逻辑中 winner_user_id 匹配问题，非本次改动范畴。
+
+### 已处理的边界情况
+
+- ✅ 客户端时钟偏快/偏慢（serverTime 偏移）
+- ✅ 网络单向延迟（收发包中间点近似消除）
+- ✅ 定时器 goroutine 静默失败（加诊断日志确认后移除）
+- ✅ StartAuction 的 endAt 不持久化
+
+### 未处理的边界情况
+
+- ⚠️ `syncServerTime()` 失败时 `serverNow()` 回退到 `Date.now()`（无重试/告警）
+- ⚠️ 浏览器标签页挂起后恢复，offset 未重新校准
+- ⚠️ 订单生成与 winner_user_id 匹配逻辑待修复

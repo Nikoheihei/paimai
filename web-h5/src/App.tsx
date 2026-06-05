@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import LoginPage from './pages/LoginPage'
+import { syncServerTime } from './utils/serverTime'
 import RoomListPage from './pages/RoomListPage'
 import LiveRoomPage from './pages/LiveRoomPage'
 import AuctionDetailPage from './pages/AuctionDetailPage'
@@ -37,7 +38,7 @@ function App() {
   const [authed, setAuthed] = useState(() => isLoggedIn())
   const [route, setRoute] = useState<Route>(parseHash)
 
-  useEffect(() => {
+  useEffect(() => { syncServerTime();
     const handler = () => setRoute(parseHash())
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)

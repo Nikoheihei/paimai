@@ -137,9 +137,13 @@ func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auc
 		Model(&model.Auction{}).
 		Where("id = ? AND version = ?", auction.ID, auction.Version).
 		Updates(map[string]interface{}{
-			"status":        auction.Status,
-			"cancel_reason": auction.CancelReason,
-			"version":       gorm.Expr("version + 1"),
+			"start_at":            auction.StartAt,
+			"end_at":              auction.EndAt,
+			"current_price_cents": auction.CurrentPriceCents,
+			"winner_user_id":      auction.WinnerUserID,
+			"status":              auction.Status,
+			"cancel_reason":       auction.CancelReason,
+			"version":             gorm.Expr("version + 1"),
 		})
 	if result.Error != nil {
 		return result.Error
@@ -260,9 +264,13 @@ func (s *GormAdminStore) UpdateAuction(ctx context.Context, auction *model.Aucti
 		Model(&model.Auction{}).
 		Where("id = ? AND version = ?", auction.ID, auction.Version).
 		Updates(map[string]interface{}{
-			"status":        auction.Status,
-			"cancel_reason": auction.CancelReason,
-			"version":       gorm.Expr("version + 1"),
+			"start_at":            auction.StartAt,
+			"end_at":              auction.EndAt,
+			"current_price_cents": auction.CurrentPriceCents,
+			"winner_user_id":      auction.WinnerUserID,
+			"status":              auction.Status,
+			"cancel_reason":       auction.CancelReason,
+			"version":             gorm.Expr("version + 1"),
 		})
 	if result.Error != nil {
 		return result.Error

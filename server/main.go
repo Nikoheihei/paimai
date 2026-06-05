@@ -68,6 +68,12 @@ func main() {
 		})
 	})
 
+	r.GET("/api/server-time", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"serverTime": time.Now().UnixMilli(),
+		})
+	})
+
 	if database != nil {
 		adminStore := repository.NewGormAdminStore(database)
 
@@ -115,7 +121,7 @@ func main() {
 
 		// 定时结算过期竞拍（每 10 秒）
 		go func() {
-			ticker := time.NewTicker(10 * time.Second)
+			ticker := time.NewTicker(3 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
 				if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {

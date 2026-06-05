@@ -374,6 +374,14 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		return nil, fmt.Errorf("unexpected nil result")
 	}
 	if !result.Accepted {
+		// 事务内 reject → 清理 inflightKey，避免阻塞后续重试
+		if s.redis != nil && s.redis.Master != nil {
+			go func() {
+				cleanCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				s.redis.Master.Del(cleanCtx, inflightKey)
+			}()
+		}
 		return result, &BidRejectError{Code: result.Status, Message: bidRejectMessage(result.Status)}
 	}
 	if result.IdempotentReplay {

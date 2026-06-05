@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { serverNow } from '../utils/serverTime'
 
 function formatTime(ms: number): string {
   if (ms <= 0) return '00:00:00'
@@ -16,11 +17,11 @@ type Props = {
 }
 
 export default function Countdown({ endAt, onEnd }: Props) {
-  const [left, setLeft] = useState(() => Math.max(0, new Date(endAt).getTime() - Date.now()))
+  const [left, setLeft] = useState(() => Math.max(0, new Date(endAt).getTime() - serverNow()))
 
   useEffect(() => {
     const timer = setInterval(() => {
-      const remaining = Math.max(0, new Date(endAt).getTime() - Date.now())
+      const remaining = Math.max(0, new Date(endAt).getTime() - serverNow())
       setLeft(remaining)
       if (remaining <= 0) { clearInterval(timer); onEnd?.() }
     }, 1000)

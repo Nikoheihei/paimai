@@ -1,6 +1,7 @@
 # 幂等 + 频率三层架构——设计心路历程
 
-> 从"出价 API 简单校验→写入"到"三层幂等架构"的完整推导。
+> 从"出价 API 简单校验→写入"到"三层幂等架构"的完整推导，
+> 以及人工对每个架构决策的修正记录。
 
 ---
 
@@ -12,123 +13,194 @@
 客户端 → Lua（只读预校验） → MySQL 事务（唯一索引做幂等）
 ```
 
-Lua 只做快速拒绝跑得快，把真正的写入和判定全扔给 MySQL。听起来合理，但用起来发现：
-
-**出价 API 不是"先校验再写入"的逻辑，而应该是"先占位再落库"的逻辑。**
-
-因为出价的本质是一个**抢锁**行为——只有一个人能成为某个价格点的持有者。你不想让所有人冲到 MySQL 门前排队才发现门关了，而是想在更近的地方就把人拦住。
+Lua 只做快速拒绝，把真正的写入和判定全扔给 MySQL。合理但不够——出价 API 的本质不是"先校验再写入"，而是**"先占位再落库"**。
 
 ---
 
-## 第一步：从「唯一索引兜底」到「Redis 缓存幂等」
+## 第一代：三层雏形（Lua 内做所有事）
 
-最早幂等全靠 MySQL 唯一索引 `(auction_id, idempotency_key)`，但这是**被动拦截**——请求已经走完了 Lua、到了 MySQL 事务里，才发现"哦这个是重复的"。
+```
+Lua:
+  ① 查 idemKey 缓存（命中→直接返回序列化结果）
+  ② SETNX inflightKey（冲突→返回 IN_FLIGHT）
+  ③ 频率检查（lastBidTsKey）
+  ④ 金额/状态校验
 
-你想的是：**幂等应该在入口处就感知到，而不是在出口处才发现。**
+MySQL 事务:
+  写入 bids + auction 更新 + outbox 事件
 
-于是在 Lua 里加了一层幂等缓存检查。这个缓存不是权威数据源，只是 MySQL 结果的副本。**谁写这个缓存？** 必须是 MySQL 事务成功后——只有事务提交了，缓存才有意义。
+事务后:
+  SET idemKey（序列化完整响应） + DEL inflightKey
+```
+
+**问题**：Lua 里同时做了读（缓存检查、校验）和写（SETNX inflightKey），职责边界模糊。
 
 ---
 
-## 第二步：从「缓存幂等」到「in-flight 锁」
+## 🔧 人工决策 #1：幂等缓存只存标志位，不存序列化结果
 
-加完缓存检查后又发现一个问题：
+**触发点**：讨论"idem:key 应该存什么"
 
-```
-请求 A：SETNX idemKey → 成功（我是第一次）
-请求 B：SETNX idemKey → 失败（被拦截）
-请求 A：MySQL 事务还没提交...
-```
+> 工业级做法：存 `{"bidId":123, "amount":800, "accepted":true}`，重放时原样返回第一次结果。
 
-如果请求 A 的事务很慢（比如锁等待、网络抖动），请求 B 应该怎么办？直接返回"重复请求"不对——A 还没确认结果呢。
+**人工决策**：**不序列化，只存标志位**。
 
-于是你加了一层 **in-flight 锁**：
+**理由**（来自你）：
 
-```
-SETNX idemKey "in-flight" EX 30
-→ 成功：我是第一个
-→ 失败：有人已经在处理了，你等着
-```
+> 直播拍卖有排行榜。如果用户已经知道自己领先就不会出价，如果用户不是领先，出价也不会被幂等拦截（因为用的是新的 idempotencyKey）。所以重放时不需要返回原始金额——客户端自己知道状态。
 
-30 秒的 TTL 意味着：如果 30 秒还没处理完，这个锁自动释放，下一个请求可以重新尝试。**这是一个超时保护，不是一个持久锁。**
+**澄清过程**：
 
----
+| 假设场景 | 是否会被拦截 |
+|----------|-------------|
+| 用户1 第一次出价（key=A） | 正常通过 |
+| 用户2 出价（key=B） | 正常通过（不同 key） |
+| 用户1 第三次出价（key=C） | **不会被拦截**——是不同的 key |
 
-## 第三步：三层各自的责任边界
+→ 所以缓存只需要 tell 调用方"这个 key 已经处理过了"，不需要告诉它处理结果是什么。
 
-到了这里，三个层次的责任才真正清楚：
-
-```
-Lua 层（快速拦截）：
-  · in-flight 锁 → 防止并发击穿
-  · 幂等缓存 → 已完成的请求快速响应
-  · 频率检查 → 防刷
-
-MySQL 层（权威判定）：
-  · 唯一索引 → 谁先到谁赢
-  · 事务 → 出价+竞拍更新+outbox 要么全有要么全无
-
-Redis 层（缓存加速）：
-  · idemKey → 存最终结果的 JSON
-  · inflightKey → 存处理中的标记
-  · lastBidTsKey → 存最后一次出价时间（频率用）
-```
-
-**MySQL 是唯一真相。Redis 只是真相的缓存。** 所以即使 Redis 所有 key 都丢了，MySQL 还在，业务不会错。
+**落地**：`idem:<auctionId>:<md5(key)> = "1"`，TTL 24h。
 
 ---
 
-## 第四步：异常路径的闭环
+## 🔧 人工决策 #2：inflight 锁从 Lua 迁移到 Go 层
 
-设计完正常流程后，把几条异常路径走了一遍：
+**触发点**：审视三层职责。
 
-### 场景 1：SETNX 成功 → MySQL 失败
+**原方案**：Lua 里做 `SETNX inflightKey`，成功后继续校验。
 
-→ Go 层要 DEL inflightKey，释放锁让下一个请求进来
-→ MySQL 失败了就是失败了，不应该留下任何痕迹
+**人工决策**：**Lua 不做任何写操作，inflight 锁交由 Go 层在 Lua 通过后执行。**
 
-### 场景 2：SETNX 成功 → Go 层 SET idemKey 前挂掉
+**理由**：
 
-→ 30 秒后 in-flight 自动过期
-→ 下一个请求 SETNX 成功，进入 MySQL → 唯一索引冲突 → 查 MySQL 拼结果 → SET idemKey
-→ **客户端无感，只是多等了一次**
+> Lua 应该保持纯只读预校验——快速拒绝非法请求。inflight 锁是"占位"行为，不是校验行为，应该放在 Go 层紧邻 MySQL 事务的入口处。
 
-### 场景 3：客户端超时重试
+**好处**：
+- Lua 回归纯函数语义：输入→校验→通过/拒绝，无副作用
+- inflight 锁的生命周期和 MySQL 事务紧耦合，Go 层控制更精准
+- 如果未来换 Lua 脚本逻辑，inflight 锁不受影响
 
-→ 同 idempotencyKey 重试
-→ Lua 看到 in-flight 存在 → 返回 IN_FLIGHT
-→ 客户端启动轮询，直到拿到结果
-→ **不会重复出价，因为 MySQL 唯一索引保底**
+**落地后的流程**：
 
-### 场景 4：两个请求同时 SETNX
+```
+Lua（只读）：
+  ① EXISTS idemKey → 命中直接返回
+  ② 频率检查（lastBidTsKey）
+  ③ 金额/状态校验
 
-→ Redis 单线程保证只有一个成功
-→ 另一个拿到 IN_FLIGHT
-→ 不会有并发问题
+Go 层：
+  SETNX inflightKey EX 30 → 失败返回 IN_FLIGHT
+
+MySQL 事务：
+  唯一索引保底
+
+事务后（goroutine / 事务内）：
+  pipeline: SET idemKey + DEL inflightKey + ZADD ranking
+```
+
+---
+
+## 🔧 人工决策 #3：ZADD 替代 ZINCRBY（排行榜幂等写）
+
+**触发点**：HTTP goroutine 和 Stream Consumer 可能同时写排行榜 ZSET。
+
+**问题**：如果两边都用 `ZINCRBY`，同一个用户的出价会被累加两次。
+
+**人工决策**：**用 ZADD（设 Score=当前价）而不是 ZINCRBY（增量加）。**
+
+**理由**：ZADD 是幂等操作——同一个 member 设同一个 score，写多少次结果都一样。ZINCRBY 是增量操作，多写一次就多增一次。
+
+**约束**：WS 广播和 ZSET 写入不得相互依赖。Consumer 的 ZADD 是"校准式写入"（full snapshot），不是增量更新。
+
+---
+
+## 🔧 人工决策 #4：inflightKey 泄漏修复
+
+**触发点**：你问"inflight 锁到底是个什么样子的状态"，我画完整链路后发现一个 gap。
+
+**问题**：MySQL 事务内有 3 个路径会拒绝出价但不释放 inflightKey：
+
+| 拒绝场景 | inflightKey 状态 |
+|----------|-----------------|
+| `auction.Status != "running"` | ❌ 泄漏（30s TTL） |
+| `now.After(auction.EndAt)` | ❌ 泄漏 |
+| `金额 < 当前价 + 加价幅度` | ❌ 泄漏 |
+| 唯一索引冲突（幂等重放） | ✅ 正常清理 |
+| 出价成功 | ✅ 正常清理 |
+
+**后果**：用户用一个合法但金额不够的 key 出价被拒后，30s 内用同一个 key 重试会被 IN_FLIGHT 挡住——哪怕上一次是业务拒绝而非并发冲突。
+
+**人工决策**：**在 `!result.Accepted` 返回前统一 DEL inflightKey。**
+
+**落地**：
+
+```go
+if !result.Accepted {
+    // 事务内 reject → 清理 inflightKey，避免阻塞后续重试
+    go func() {
+        s.redis.Master.Del(ctx, inflightKey)
+    }()
+    return result, err
+}
+```
 
 ---
 
 ## 最终形态
 
-整个链路变成了：
-
 ```
-客户端生成 key → 重试用同一个 key
-    ↓
-Lua SETNX in-flight → 失败就等
-Lua 查 idemKey 缓存 → 有就直接返回
-    ↓
-MySQL 事务写入（唯一索引保底）
-    ↓
-缓存写入（SET idemKey + DEL inflightKey）
+                请求进来（相同 idempotencyKey）
+                          │
+                          ▼
+                ┌─────────────────┐
+                │ ① Lua（只读）    │
+                │  · EXISTS idemKey│  ← flag only，不序列化
+                │  · 频率检查      │
+                │  · 金额/状态校验  │
+                └────────┬────────┘
+                         │ accepted=true
+                         ▼
+                ┌─────────────────┐
+                │ ② Go SETNX      │  ← inflight 锁（30s TTL）
+                │   失败→IN_FLIGHT │
+                └────────┬────────┘
+                         │ 成功
+                         ▼
+                ┌─────────────────┐
+                │ ③ MySQL 事务    │  ← 唯一真相
+                │  · 唯一索引保底  │
+                └────────┬────────┘
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+       出价成功      幂等重放      业务拒绝
+            │            │            │
+            ▼            ▼            ▼
+       goroutine   事务内同步    goroutine
+       pipeline:   pipeline:    DEL inflight
+       SET idemKey SET idemKey  ✅ (刚修)
+       DEL inflight DEL inflight
+       ZADD rank   ZADD rank
 ```
 
-### 三条原则
+### 四条核心原则
 
-1. **MySQL 是唯一真相，Redis 只是缓存的真相**
-2. **每一次写入 Redis 都必须在 MySQL 成功之后**
-3. **异常时宁可让请求重试，也不能让数据不一致**
+1. **MySQL 是唯一真相，Redis 只是缓存的真相。**
+2. **Redis 每一次写入都必须在 MySQL 成功后。**
+3. **Lua 只读，不写。** 所有写操作在 Go 层控制。
+4. **inflightKey 的生命周期必须闭环。** 无论出价成功、幂等重放还是业务拒绝，都要释放。
+
+### 两个兜底
+
+| 场景 | 兜底 |
+|------|------|
+| Go 在 SETNX 后、DEL inflight 前崩溃 | inflightKey 30s TTL 自然过期 |
+| Redis 全量数据丢失 | MySQL 唯一索引保证业务正确 |
 
 ---
 
-**核心认知转变：** 出价 API 不是"先校验再写入"的逻辑，而是"先占位再落库"的逻辑。出价的本质是一个锁竞争行为。
+**核心认知转变：**
+
+出价 API 不是"先校验再写入"的逻辑，而是"先占位再落库"的逻辑。
+出价的本质是一个锁竞争行为——
+**Lua 是门禁，SETNX 是取号机，MySQL 是柜台，Redis 是回执。**

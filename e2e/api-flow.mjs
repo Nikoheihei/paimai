@@ -283,7 +283,14 @@ async function main() {
   console.log('\n▸ Phase 4: 竞拍到期结算');
 
   console.log('  等待竞拍到期...（约 13 秒）');
-  await sleep(13000);
+  const pollStart = Date.now();
+  while (true) {
+    await sleep(2000);
+    let checkR = await request('GET', `/api/auctions/${auctionId}`);
+    let checkA = checkR?.data?.data;
+    if (checkA && (checkA.status === 'sold' || checkA.status === 'settled')) break;
+    if (Date.now() - pollStart > 60000) break; // max 60s
+  }
 
   // 查最终竞拍状态
   r = await request('GET', `/api/auctions/${auctionId}`, { token: buyer1Token });
