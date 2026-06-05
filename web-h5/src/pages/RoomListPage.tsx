@@ -86,8 +86,6 @@ export default function RoomListPage() {
       {/* 下拉刷新指示器 */}
       {refreshing && <div className="refresh-indicator">🔄 刷新中...</div>}
 
-      <h2 className="page-title">正在直播</h2>
-
       {filtered.length === 0 ? (
         <div className="panel empty-state">
           <p>{search ? '未找到匹配的直播间' : '暂无直播中的房间'}</p>

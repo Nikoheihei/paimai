@@ -39,36 +39,12 @@ export default function AnchorHeader({ info, viewerCount=0, onFollow, onMoreRoom
       {/* 信息区 */}
       <div className="anchor-info">
         <div className="anchor-name">{info.nickname || `用户${info.userId}`}</div>
-        <div className="anchor-meta-row">
-          {isPlaceholder && (
-            <>
-              <span className="anchor-online-dot" style={{background:'var(--gold)'}} />
-              <span style={{color:'var(--gold)'}}>&#9888; 主播信息加载中</span>
-            </>
-          )}
-          {!isPlaceholder && (
-            <>
-              <span className="anchor-online-dot" />
-              <span>在线</span>
-              {viewerCount > 0 && (
-                <span>{'\u{1F441}'} {viewerCount>=10000?`${(viewerCount/10000).toFixed(1)}万`:String(viewerCount)} 人在看</span>
-              )}
-            </>
-          )}
-        </div>
       </div>
 
       {/* 关注按钮 */}
       <button className={`anchor-follow-btn ${followed?'followed':''}`} onClick={handleFollow}>
         {followed ? '已关注' : '+关注'}
       </button>
-
-      {/* 更多直播 */}
-      {onMoreRooms && (
-        <button className="anchor-more-link" onClick={onMoreRooms}>
-          更多 &rsaquo;
-        </button>
-      )}
     </div>
   )
 }

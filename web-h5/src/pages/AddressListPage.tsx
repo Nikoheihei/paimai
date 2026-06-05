@@ -111,7 +111,6 @@ export default function AddressListPage() {
   return (
     <div className="address-page">
       <div className="page-header">
-        <h2>收货地址</h2>
         <button className="admin-btn primary" onClick={() => { setShowForm(!showForm); resetForm() }}>
           {showForm ? '取消' : '+ 新建地址'}
         </button>

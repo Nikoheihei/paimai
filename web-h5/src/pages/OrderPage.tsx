@@ -112,7 +112,6 @@ export default function OrderPage() {
   return (
     <div className="order-page">
       <div className="page-header">
-        <h2>我的订单</h2>
         {selected && <button className="back-btn" onClick={() => { setSelected(null); setShowAddress(false) }}>← 返回</button>}
       </div>
 
