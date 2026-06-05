@@ -137,21 +137,18 @@ html, body {
   z-index: 1;
 }
 .lrp-scroll-area {
-  position: absolute; inset: 0; overflow-y: auto;
-  overflow-x: hidden; -webkit-overflow-scrolling: touch;
+  position: absolute; inset: 0;
+  overflow: hidden;
   padding-bottom: calc(env(safe-area-inset-bottom) + 90px);
-  scrollbar-width: none;
 }
-.lrp-scroll-area::-webkit-scrollbar { display: none; }
 
 /* ================================================================
    SECTION 2: 视频播放器区域（全屏铺满）
    ================================================================ */
 
 .video-player {
-  position: relative; width: 100%;
-  aspect-ratio: 9 / 16; max-height: 100dvh;
-  background: #000; overflow: hidden;
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  background: #000; overflow: hidden; z-index: 1;
 }
 .vp-container {
   position: absolute; inset: 0;
@@ -215,17 +212,61 @@ html, body {
    SECTION 3: 浮动主播信息卡（毛玻璃，浮在视频上方）
    ================================================================ */
 
+/* 直播间内的返回按钮 */
+.live-room-page .back-btn {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 18px;
+  height: 18px;
+  font-size: 30px;
+  background: none;
+  border: none;
+  color: #fff;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .anchor-header {
-  position: absolute; top: 14px; left: 14px;
-  display: flex; align-items: center;
-  gap: 10px; padding: 8px 12px;
-  max-width: 33vw;
-  border-radius: var(--radius-md);
-  background: var(--glass-strong); backdrop-filter: blur(20px) saturate(180%);
+  position: absolute;
+  top: 14px;
+  left: calc(14px + 18px + 6px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  max-width: calc(33vw * 0.875);
+  border-radius: var(--radius-sm);
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid var(--glass-border);
-  z-index: 20; animation: fadeInUp .4s ease;
+  z-index: 20;
+  animation: fadeInUp .4s ease;
   min-width: 0;
+}
+.anchor-header .anchor-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+.anchor-header .anchor-name {
+  font-size: 12px;
+}
+.anchor-header .anchor-meta-row {
+  font-size: 10px;
+  gap: 4px;
+}
+.anchor-header .anchor-follow-btn {
+  padding: 3px 8px;
+  font-size: 10px;
+  border-radius: 10px;
+}
+.anchor-header .anchor-more-link {
+  font-size: 10px;
+  padding: 2px 4px;
 }
 .anchor-avatar {
   width: 36px; height: 36px; border-radius: 50%;
@@ -842,7 +883,7 @@ html, body {
 }
 .h5-nav a {
   flex: 1; text-align: center; padding: 10px; border-radius: var(--radius-sm);
-  font-size: 13px; font-weight: 600; color: var(--text-muted);
+  font-size: 13px; font-weight: 600; color: #fff;
   text-decoration: none; transition: all .2s;
 }
 .h5-nav a.active {

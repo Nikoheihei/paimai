@@ -206,7 +206,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
         {/* 返回按钮 */}
         <button className="back-btn" onClick={onBack} title="返回">
-          &#8592;
+          &#8249;
         </button>
 
         {/* 重连按钮 */}
@@ -248,7 +248,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
         <button className={`bt-icon-btn ${false?'liked':''}`} title="点赞"
           onClick={() => Toast.success('❤️ 点赞 +1')}>❤</button>
         <button className="bt-cart-btn" title="购物车/商品"
-          onClick={() => window.location.hash='#/orders'}>🛒</button>
+          onClick={() => Toast.show('🛒 购物车功能开发中')}>🛒</button>
       </div>
 
       {/* F: 拍卖结果弹窗 */}
