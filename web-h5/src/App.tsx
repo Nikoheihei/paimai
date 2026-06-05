@@ -63,26 +63,28 @@ function App() {
     )
   }
 
-  const showNav = route.page === 'rooms' || route.page === 'orders'
+  const showNav = route.page === 'rooms' || route.page === 'orders' || route.page === 'address'
   const navActive = (p: string) => route.page === p ? 'active' : ''
 
   return (
     <div className="app">
       <ErrorBoundary>
         {showNav && (
-          <nav className="h5-nav">
-            <a href="#/" className={navActive('rooms')}>首页</a>
-            <a href="#/orders" className={navActive('orders')}>我的订单</a>
-            <a href="#/address" className={navActive('address')}>地址</a>
-            <button className="logout-link" onClick={handleLogout}>退出</button>
-          </nav>
-        )}
+          <div className="page-scrollable">
+            <nav className="h5-nav">
+              <a href="#/" className={navActive('rooms')}>首页</a>
+              <a href="#/orders" className={navActive('orders')}>我的订单</a>
+              <a href="#/address" className={navActive('address')}>地址</a>
+              <button className="logout-link" onClick={handleLogout}>退出</button>
+            </nav>
 
-        {route.page === 'rooms' && <RoomListPage />}
+            {route.page === 'rooms' && <RoomListPage />}
+            {route.page === 'orders' && <OrderPage />}
+            {route.page === 'address' && <AddressListPage />}
+          </div>
+        )}
         {route.page === 'room' && <LiveRoomPage roomId={route.roomId!} onBack={() => window.location.hash = '#/'} />}
         {route.page === 'auction' && <AuctionDetailPage auctionId={route.auctionId!} onBack={() => window.location.hash = '#/'} />}
-        {route.page === 'orders' && <OrderPage />}
-        {route.page === 'address' && <AddressListPage />}
       </ErrorBoundary>
     </div>
   )

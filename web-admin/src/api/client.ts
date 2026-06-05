@@ -91,7 +91,7 @@ export async function getRoomStats(roomId: number): Promise<{ roomId: number; on
 
 export type Auction = { id: number; roomId: number; productId: number; mode: string; startPriceCents: number; currentPriceCents: number; bidIncrementCents: number; capPriceCents: number; reservePriceCents: number | null; startAt: string; endAt: string; status: string; winnerUserId: number | null }
 export async function createAuction(roomId: number, productId: number, mode: string, startPriceCents: number, bidIncrementCents: number, capPriceCents: number, startAt?: string, endAt?: string): Promise<Auction> {
-  return apiFetch('/admin/auctions', { method: 'POST', body: JSON.stringify({ roomId, productId, mode, startPriceCents, bidIncrementCents, capPriceCents, startAt: startAt || '', endAt: endAt || '' }) })
+  return apiFetch('/admin/auctions', { method: 'POST', body: JSON.stringify({ roomId, productId, mode, startPriceCents, bidIncrementCents, capPriceCents, startAt: startAt || null, endAt: endAt || null }) })
 }
 export async function listAuctions(roomId?: number, status?: string): Promise<Auction[]> {
   const params = new URLSearchParams()

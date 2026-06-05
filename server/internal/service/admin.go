@@ -74,8 +74,8 @@ type AuctionInput struct {
 	ReservePriceCents  *int64 `json:"reservePriceCents"`
 	ExtendThresholdSec int    `json:"extendThresholdSec"`
 	ExtendDurationSec  int    `json:"extendDurationSec"`
-	StartAt            time.Time `json:"startAt"`
-	EndAt              time.Time `json:"endAt"`
+	StartAt            *time.Time `json:"startAt"`
+	EndAt              *time.Time `json:"endAt"`
 }
 
 // AuctionPatchInput 是修改未开始竞拍规则的输入参数。
@@ -144,12 +144,15 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 
 	mode := normalizedMode(input.Mode)
 	now := time.Now()
-	startAt := input.StartAt
-	endAt := input.EndAt
-	if startAt.IsZero() {
+	var startAt, endAt time.Time
+	if input.StartAt != nil && !input.StartAt.IsZero() {
+		startAt = *input.StartAt
+	} else {
 		startAt = now
 	}
-	if endAt.IsZero() || endAt.Before(startAt) {
+	if input.EndAt != nil && !input.EndAt.IsZero() && !input.EndAt.Before(startAt) {
+		endAt = *input.EndAt
+	} else {
 		endAt = startAt.Add(5 * time.Minute)
 	}
 	auction := &model.Auction{

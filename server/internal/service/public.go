@@ -412,7 +412,11 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 
 	// ④ 同步结算（触顶成交 — 带 2 次重试）
 	if result.Sold && s.settle != nil {
-		go settleWithRetry(context.Background(), auctionID, s.settle, 2)
+		go func() {
+			// 先等待一小段时间让 MySQL 事务完全提交，避免结算时读不到最新状态
+			time.Sleep(200 * time.Millisecond)
+			settleWithRetry(context.Background(), auctionID, s.settle, 2)
+		}()
 	}
 	return result, nil
 }

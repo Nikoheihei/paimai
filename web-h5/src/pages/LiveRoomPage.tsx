@@ -168,8 +168,8 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
   if (!userId) return (
     <div className="live-room-page" style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{textAlign:'center',color:'var(--text-muted)'}}>
-        <div style={{fontSize:40,marginBottom:12}}>&#9888;</div>
+        <div style={{textAlign:'center',color:'var(--text-muted)'}}>
+        <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
         <div>无法识别用户身份</div>
         <button style={{marginTop:12,padding:'8px 20px',background:'var(--primary-grad)',border:'none',borderRadius:10,color:'#fff',fontWeight:700,cursor:'pointer'}}
           onClick={onBack}>返回登录</button>
@@ -189,7 +189,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
             onMoreRooms={()=>window.location.hash='#/'} />
         ) : (
           <div className="anchor-header" style={{justifyContent:'center',padding:14}}>
-            <span style={{fontSize:13,color:'var(--text-muted)'}}>\u23F3 加载主播...</span>
+            <span style={{fontSize:13,color:'var(--text-muted)'}}>⏳ 加载主播...</span>
           </div>
         )}
 
@@ -244,11 +244,11 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
           }}
         />
         <button className="bt-icon-btn" title="分享"
-          onClick={() => Toast.show('\u{1F4E4} 分享功能开发中')}>\uD83D\uDCE4</button>
+          onClick={() => Toast.show('📤 分享功能开发中')}>📤</button>
         <button className={`bt-icon-btn ${false?'liked':''}`} title="点赞"
-          onClick={() => Toast.success('\u2764\uFE0F 点赞 +1')}>❤</button>
+          onClick={() => Toast.success('❤️ 点赞 +1')}>❤</button>
         <button className="bt-cart-btn" title="购物车/商品"
-          onClick={() => window.location.hash='#/orders'}>\uD83D\uDED2</button>
+          onClick={() => window.location.hash='#/orders'}>🛒</button>
       </div>
 
       {/* F: 拍卖结果弹窗 */}

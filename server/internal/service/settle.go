@@ -69,8 +69,8 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 		}, nil
 	}
 
-	// 只有 running 状态才允许结算
-	if auction.Status != string(statemachine.StateRunning) {
+	// running 或 sold（PlaceBid 触顶成交时已设置）均可结算
+	if auction.Status != string(statemachine.StateRunning) && auction.Status != string(statemachine.StateSold) {
 		return nil, fmt.Errorf("%w: 只能结算进行中的竞拍, 当前状态: %s", ErrInvalidTransition, auction.Status)
 	}
 

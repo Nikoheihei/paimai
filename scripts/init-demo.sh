@@ -13,7 +13,7 @@ echo ">>> 商家1：翡翠世家"
 
 REG=$(curl -s -X POST "$BASE/api/auth/register" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"jade","password":"jade123456","nickname":"翡翠世家"}')
+  -d '{"username":"jade","password":"jade123456","nickname":"翡翠世家","role":"seller"}')
 TOKEN1=$(echo "$REG" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token','') or '')" 2>/dev/null)
 if [ -z "$TOKEN1" ]; then
   TOKEN1=$(curl -s -X POST "$BASE/api/auth/login" \
@@ -78,7 +78,7 @@ echo ">>> 商家2：潮玩社"
 
 REG2=$(curl -s -X POST "$BASE/api/auth/register" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"toy","password":"toy123456","nickname":"潮玩社"}')
+  -d '{"username":"toy","password":"toy123456","nickname":"潮玩社","role":"seller"}')
 TOKEN2=$(echo "$REG2" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token','') or '')" 2>/dev/null)
 if [ -z "$TOKEN2" ]; then
   TOKEN2=$(curl -s -X POST "$BASE/api/auth/login" \
@@ -135,7 +135,7 @@ echo ">>> 演示商家（离线）"
 
 REG3=$(curl -s -X POST "$BASE/api/auth/register" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"demo","password":"demo123456","nickname":"演示商家"}') || true
+  -d '{"username":"demo","password":"demo123456","nickname":"演示商家","role":"seller"}') || true
 TOKEN3=$(echo "$REG3" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token','') or '')" 2>/dev/null)
 if [ -z "$TOKEN3" ]; then
   TOKEN3=$(curl -s -X POST "$BASE/api/auth/login" \
