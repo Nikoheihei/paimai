@@ -49,31 +49,11 @@ export default function VideoPlayer({ coverUrl, isLive, viewerCount = 0, roomTit
         )}
       </div>
 
-      {/* LIVE 标签 */}
-      {isLive && (
-        <div className="vp-live-badge">
-          <span className="vp-live-dot" />
-          LIVE
-        </div>
-      )}
-
       {/* 观看人数 */}
       {isLive && viewerCount > 0 && (
         <div className="vp-viewers">
           <span className="vp-eye-icon">&#128065;</span>
           {viewerCount >= 10000 ? `${(viewerCount/10000).toFixed(1)}万` : viewerCount}
-        </div>
-      )}
-
-      {/* 底部房间标题 */}
-      {(roomTitle || isLive) && (
-        <div className="vp-room-title-bar">
-          <h3>{roomTitle || '精品拍卖直播间'}</h3>
-          {isLive && (
-            <span style={{ fontSize: 11, color: '#f44336', fontWeight: 700, marginLeft: 8 }}>
-              &#9679; 直播中
-            </span>
-          )}
         </div>
       )}
     </div>
