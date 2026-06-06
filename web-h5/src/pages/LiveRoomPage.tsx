@@ -23,6 +23,7 @@ import VideoPlayer from '../components/VideoPlayer'
 import AnchorHeader from '../components/AnchorHeader'
 import AuctionPanel from '../components/AuctionPanel'
 import ProductFloatPanel from '../components/ProductFloatPanel'
+import AddressFloatPanel, { type AddressItem } from '../components/AddressFloatPanel'
 import AuctionResultModal from '../components/AuctionResultModal'
 import Toast from '../components/Toast'
 import BarrageLayer, { randomBarrage } from '../components/BarrageLayer'
@@ -57,6 +58,18 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
   // 拍卖结束弹窗状态
   const [endedAuction, setEndedAuction] = useState<Auction | null>(null)
   const [showResultModal, setShowResultModal] = useState(false)
+  // 已支付的竞拍 ID（跨面板保持状态）
+  const [paidAuctionIds, setPaidAuctionIds] = useState<number[]>([])
+  const handlePaid = useCallback((auctionId: number) => {
+    setPaidAuctionIds(prev => prev.includes(auctionId) ? prev : [...prev, auctionId])
+  }, [])
+  // 选中的收货地址
+  const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null)
+  const [selectedAddress, setSelectedAddress] = useState<AddressItem | null>(null)
+  const handleSelectAddress = useCallback((addr: AddressItem) => {
+    setSelectedAddressId(addr.id)
+    setSelectedAddress(addr)
+  }, [])
   // 观看数模拟
   const [viewerCount, setViewerCount] = useState(128 + Math.floor(Math.random() * 500))
 
@@ -228,6 +241,10 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
           <AuctionPanel roomId={roomId} userId={userId}
             wsMessage={lastMessage} connected={connected}
             activeAuctionId={activeAuctionId}
+            paidAuctionIds={paidAuctionIds}
+            onPaid={handlePaid}
+            selectedAddressId={selectedAddressId}
+            selectedAddress={selectedAddress}
             productName={activeProductName}
             productImage={activeProductImage}
             onAuctionEnd={(a) => { sound.playAuctionEnd(); handleAuctionEnd(a) }}
@@ -253,6 +270,12 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
       <ProductFloatPanel auctions={allAuctions} activeAuctionId={activeAuctionId}
         onSelect={handleSelectAuction} productNames={productNames}
         productImages={productImages} />
+
+      {/* 右侧地址浮窗 */}
+      <AddressFloatPanel
+        selectedId={selectedAddressId}
+        onSelect={handleSelectAddress}
+      />
 
       {/* 弹幕层 */}
       <BarrageLayer messages={barrages} />
