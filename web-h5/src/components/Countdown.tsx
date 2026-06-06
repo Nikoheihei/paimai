@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { serverNow } from '../utils/serverTime'
 
 function formatTime(ms: number): string {
@@ -18,15 +18,27 @@ type Props = {
 
 export default function Countdown({ endAt, onEnd }: Props) {
   const [left, setLeft] = useState(() => Math.max(0, new Date(endAt).getTime() - serverNow()))
+  const onEndRef = useRef(onEnd)
+  onEndRef.current = onEnd
+
+  // 当 endAt 变化时重新开始倒计时
+  const endTime = useRef(new Date(endAt).getTime())
+  endTime.current = new Date(endAt).getTime()
+
+  const tick = useCallback(() => {
+    const remaining = Math.max(0, endTime.current - serverNow())
+    setLeft(remaining)
+    if (remaining <= 0) {
+      onEndRef.current?.()
+    }
+  }, [])
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      const remaining = Math.max(0, new Date(endAt).getTime() - serverNow())
-      setLeft(remaining)
-      if (remaining <= 0) { clearInterval(timer); onEnd?.() }
-    }, 1000)
+    // endAt 变化时，重置剩余时间并重启定时器
+    setLeft(Math.max(0, endTime.current - serverNow()))
+    const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
-  }, [endAt, onEnd])
+  }, [endAt, tick])
 
   const urgent = left < 30000 // 30秒内红色闪烁
 

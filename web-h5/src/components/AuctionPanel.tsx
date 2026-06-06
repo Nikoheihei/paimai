@@ -31,6 +31,10 @@ type Props = {
   activeAuctionId?: number | null
   productName?: string
   productImage?: string
+  paidAuctionIds?: number[]
+  onPaid?: (auctionId: number) => void
+  selectedAddressId?: number | null
+  selectedAddress?: { id: number; name: string; phone: string; province: string; city: string; district: string; detail: string } | null
   onAuctionEnd?: (auction: Auction) => void
   onOutbid?: () => void
   onBidSuccess?: () => void
@@ -56,6 +60,8 @@ function priceCents(a: Auction): number {
 export default function AuctionPanel({
   roomId, userId, wsMessage, connected,
   activeAuctionId, productName, productImage,
+  paidAuctionIds = [], onPaid,
+  selectedAddressId, selectedAddress,
   onAuctionEnd, onOutbid, onBidSuccess,
 }: Props) {
   const [current, setCurrent] = useState<Auction | null>(null)
@@ -69,12 +75,12 @@ export default function AuctionPanel({
   const [showPayModal, setShowPayModal] = useState(false)
   const [payCountdown, setPayCountdown] = useState(300)
   const [payLoading, setPayLoading] = useState(false)
-  const [paidAuctionIds, setPaidAuctionIds] = useState<number[]>([])
 
   const prevStatusRef = useRef<string>('')
   const idemCounter = useRef(0)
   const payTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const payTriggeredRef = useRef<number | null>(null)
+  const payDeadlineRef = useRef(0) // 支付截止时间戳（毫秒），0 表示未开始
 
   // 初始加载
   useEffect(() => {
@@ -168,52 +174,73 @@ export default function AuctionPanel({
     setBidAmount(fmt(nextAmount))
   }, [current])
 
+  // 停止支付倒计时（完全清理）
   const stopPayCountdown = useCallback(() => {
     if (payTimerRef.current) {
       clearInterval(payTimerRef.current)
       payTimerRef.current = null
     }
+    payDeadlineRef.current = 0
+    setPayCountdown(0)
   }, [])
 
-  const startPayCountdown = useCallback(() => {
+  // 启动支付倒计时（独立运行，不依赖弹窗状态）
+  // durationSeconds: 倒计时秒数，默认 300
+  const startPayCountdown = useCallback((durationSeconds: number = 300) => {
     stopPayCountdown()
-    setPayCountdown(300)
-    payTimerRef.current = setInterval(() => {
-      setPayCountdown(prev => {
-        if (prev <= 1) {
-          stopPayCountdown()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
+    const deadline = Date.now() + durationSeconds * 1000
+    payDeadlineRef.current = deadline
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((payDeadlineRef.current - Date.now()) / 1000))
+      setPayCountdown(remaining)
+      if (remaining <= 0) {
+        clearInterval(payTimerRef.current!)
+        payTimerRef.current = null
+        payDeadlineRef.current = 0
+      }
+    }
+    tick() // 立即计算一次
+    payTimerRef.current = setInterval(tick, 1000)
   }, [stopPayCountdown])
 
+  const handleCountdownEnd = useCallback(() => {
+    if (!current) return
+    fetchAuction(current.id).then(setCurrent)
+  }, [current])
+
+  // 关闭支付弹窗（倒计时继续在后台运行）
   const closePayModal = useCallback(() => {
     setShowPayModal(false)
-    stopPayCountdown()
-  }, [stopPayCountdown])
+    // 不停止倒计时，后台继续
+  }, [])
 
+  // 打开支付弹窗（从后台倒计时同步当前剩余时间）
   const openPayModal = useCallback(() => {
     if (!current || paidAuctionIds.includes(current.id)) return
     setShowPayModal(true)
-    startPayCountdown()
-  }, [current, paidAuctionIds, startPayCountdown])
+    // 同步显示当前实际剩余时间
+    if (payDeadlineRef.current > 0) {
+      const remaining = Math.max(0, Math.ceil((payDeadlineRef.current - Date.now()) / 1000))
+      setPayCountdown(remaining)
+    }
+  }, [current, paidAuctionIds])
 
   const soldWinnerAuctionId = current?.status === 'sold' && current.winnerUserId === userId
     ? current.id
     : null
   const isCurrentPaid = current ? paidAuctionIds.includes(current.id) : false
 
-  // 成交后自动弹出支付倒计时（每个成交竞拍只触发一次）
+  // 成交后自动启动支付倒计时 + 弹出弹窗（每个成交竞拍只触发一次）
   useEffect(() => {
     if (!soldWinnerAuctionId || paidAuctionIds.includes(soldWinnerAuctionId)) return
     if (payTriggeredRef.current === soldWinnerAuctionId) return
     payTriggeredRef.current = soldWinnerAuctionId
+    startPayCountdown(300)
     setShowPayModal(true)
-    startPayCountdown()
   }, [soldWinnerAuctionId, paidAuctionIds, startPayCountdown])
 
+  // 组件卸载时清理
   useEffect(() => () => stopPayCountdown(), [stopPayCountdown])
 
   const handlePay = async () => {
@@ -227,8 +254,11 @@ export default function AuctionPanel({
         return
       }
       const order = orders.find(o => o.auctionId === current.id) || orders[0]
-      await payBuyerOrder(order.id)
-      setPaidAuctionIds(prev => prev.includes(current.id) ? prev : [...prev, current.id])
+      const addrSnapshot = selectedAddress
+        ? `${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail} / ${selectedAddress.name} ${selectedAddress.phone}`
+        : undefined
+      await payBuyerOrder(order.id, selectedAddressId ?? undefined, addrSnapshot)
+      onPaid?.(current.id)
       setBidStatus('ok')
       setBidMsg('支付成功！')
       setShowPayModal(false)
@@ -290,7 +320,7 @@ export default function AuctionPanel({
       {/* 倒计时 */}
       {(isRunning || isScheduled) && (
         <Countdown endAt={current.endAt}
-          onEnd={() => fetchAuction(current.id).then(setCurrent)} />
+          onEnd={handleCountdownEnd} />
       )}
 
       {/* 价格区域 */}
@@ -351,7 +381,35 @@ export default function AuctionPanel({
                 <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>成交价</div>
                 <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--primary)' }}>&yen;{fmt(current.currentPriceCents)}</div>
               </div>
-              <div style={{ textAlign: 'center', fontSize: 14, color: '#ff4757', fontWeight: 700 }}>
+              {/* 收货地址 */}
+              {selectedAddress && (
+                <div style={{
+                  marginTop: 12, padding: '10px 12px',
+                  background: 'rgba(255,255,255,.04)',
+                  borderRadius: 8,
+                  border: '1px solid var(--glass-border)',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>收货地址</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{selectedAddress.name} {selectedAddress.phone}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {selectedAddress.province}{selectedAddress.city}{selectedAddress.district}{selectedAddress.detail}
+                  </div>
+                </div>
+              )}
+              {!selectedAddress && (
+                <div style={{
+                  marginTop: 12, padding: '10px 12px',
+                  background: 'rgba(255,152,0,.08)',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,152,0,.15)',
+                  textAlign: 'center',
+                  fontSize: 12,
+                  color: '#ffa726',
+                }}>
+                  未选择收货地址，请在右侧地址栏中选择
+                </div>
+              )}
+              <div style={{ textAlign: 'center', fontSize: 14, color: '#ff4757', fontWeight: 700, marginTop: 10 }}>
                 ⏰ 支付倒计时: {Math.floor(payCountdown / 60)}:{String(payCountdown % 60).padStart(2, '0')}
               </div>
               {payCountdown === 0 && (
@@ -401,7 +459,7 @@ export default function AuctionPanel({
         </div>
       )}
 
-      {/* 返回直播按钮（始终显示，方便退出竞拍卡片） */}
+      {/* 返回直播按钮（关闭竞拍面板，回到视频直播画面） */}
       <button
         className="back-to-live-btn"
         onClick={() => window.dispatchEvent(new CustomEvent('auction:close'))}
