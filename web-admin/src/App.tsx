@@ -59,10 +59,10 @@ function App() {
   return (
     <div className="admin-app">
       <nav className="admin-nav">
-        <a href="#/" className={navActive('dashboard')}>📊 概览</a>
-        <a href="#/rooms" className={navActive('rooms') || navActive('room-detail') ? 'active' : ''}>📺 直播间</a>
-        <a href="#/products" className={navActive('products')}>📦 商品</a>
-        <a href="#/orders" className={navActive('orders')}>📋 订单</a>
+        <a href="#/" className={navActive('dashboard')}>概览</a>
+        <a href="#/rooms" className={navActive('rooms') || navActive('room-detail') ? 'active' : ''}>直播间</a>
+        <a href="#/products" className={navActive('products')}>商品</a>
+        <a href="#/orders" className={navActive('orders')}>订单</a>
         <button className="logout-btn" onClick={handleLogout}>退出</button>
       </nav>
       <main>

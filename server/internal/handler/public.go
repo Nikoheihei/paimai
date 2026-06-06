@@ -39,10 +39,6 @@ func RegisterPublicRoutes(r *gin.Engine, publicService *service.PublicService, h
 		api.GET("/auctions/:id/ranking", h.getRanking)
 		api.POST("/auctions/:id/bids", h.placeBid)
 
-		api.GET("/orders", h.listBuyerOrders)
-		api.GET("/orders/:id", h.getBuyerOrder)
-		api.POST("/orders/:id/pay", h.payBuyerOrder)
-
 		api.GET("/rooms/:roomId/ws", h.serveWS)
 	}
 }
@@ -117,36 +113,6 @@ func (h *PublicHandler) placeBid(c *gin.Context) {
 		return
 	}
 	writeResult(c, result, err)
-}
-
-// listBuyerOrders 返回当前用户的订单列表。
-func (h *PublicHandler) listBuyerOrders(c *gin.Context) {
-	orders, err := h.service.ListBuyerOrders(c.Request.Context(), mustGetUserID(c))
-	if orders == nil {
-		response.Success(c, []struct{}{})
-		return
-	}
-	writeResult(c, orders, err)
-}
-
-// getBuyerOrder 返回当前用户的订单详情。
-func (h *PublicHandler) getBuyerOrder(c *gin.Context) {
-	id, ok := pathID(c)
-	if !ok {
-		return
-	}
-	order, err := h.service.GetBuyerOrder(c.Request.Context(), id, mustGetUserID(c))
-	writeResult(c, order, err)
-}
-
-// payBuyerOrder 模拟支付当前用户的订单。
-func (h *PublicHandler) payBuyerOrder(c *gin.Context) {
-	id, ok := pathID(c)
-	if !ok {
-		return
-	}
-	order, err := h.service.PayBuyerOrder(c.Request.Context(), id, mustGetUserID(c))
-	writeResult(c, order, err)
 }
 
 // serveWS 处理 WebSocket 升级请求，验证房间存在后将连接注册到 Hub。

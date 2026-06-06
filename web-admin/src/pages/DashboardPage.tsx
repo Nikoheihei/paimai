@@ -36,10 +36,10 @@ export default function DashboardPage() {
   }, [])
 
   const statCards = [
-    { label: '直播间数', value: stats.rooms, icon: '📺', color: '#ff6b35' },
-    { label: '商品总数', value: stats.products, icon: '📦', color: '#1890ff' },
-    { label: '进行中竞拍', value: stats.running, icon: '⚡', color: '#52c41a' },
-    { label: '今日成交额', value: `¥${formatCents(stats.todayRevenue)}`, icon: '💰', color: '#faad14' },
+    { label: '直播间数', value: stats.rooms, icon: '播', color: '#ff6b35' },
+    { label: '商品总数', value: stats.products, icon: '品', color: '#1890ff' },
+    { label: '进行中竞拍', value: stats.running, icon: '拍', color: '#52c41a' },
+    { label: '今日成交额', value: `¥${formatCents(stats.todayRevenue)}`, icon: '额', color: '#faad14' },
   ]
 
   if (loading) return <div className="admin-page"><p className="empty">加载中…</p></div>
@@ -47,7 +47,7 @@ export default function DashboardPage() {
   return (
     <div className="admin-page">
       <div className="page-header">
-        <h1>📊 商家数据概览</h1>
+        <h1>商家数据概览</h1>
       </div>
 
       {/* 统计卡片 */}
@@ -63,9 +63,9 @@ export default function DashboardPage() {
 
       {/* 快捷操作 */}
       <div className="dashboard-actions">
-        <button className="admin-btn primary" onClick={() => window.location.hash = '#/rooms'}>📺 管理直播间</button>
-        <button className="admin-btn primary" onClick={() => window.location.hash = '#/products'}>📦 管理商品</button>
-        <button className="admin-btn" onClick={() => window.location.hash = '#/orders'}>📋 查看订单</button>
+        <button className="admin-btn primary" onClick={() => window.location.hash = '#/rooms'}>管理直播间</button>
+        <button className="admin-btn primary" onClick={() => window.location.hash = '#/products'}>管理商品</button>
+        <button className="admin-btn" onClick={() => window.location.hash = '#/orders'}>查看订单</button>
       </div>
 
       {/* 最近竞拍动态 */}

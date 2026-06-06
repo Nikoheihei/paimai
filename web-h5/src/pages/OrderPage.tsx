@@ -5,23 +5,11 @@
 
 import { useEffect, useState } from 'react'
 import type { Order, Address } from '../api/client'
-import { payBuyerOrder, getBuyerOrder, listAddresses, getToken } from '../api/client'
-
-const BASE = '/api'
+import { payBuyerOrder, getBuyerOrder, listAddresses, listBuyerOrders } from '../api/client'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
-
-function authHeaders(): Record<string, string> {
-  const token = getToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-async function fetchOrders(): Promise<Order[]> {
-  const res = await fetch(`${BASE}/orders`, { headers: authHeaders() })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data || []
-}
+function productName(order: Order) { return order.productName || `商品 #${order.productId}` }
+function sellerName(order: Order) { return order.sellerNickname || `商家 #${order.sellerId}` }
 
 const statusLabel: Record<string, string> = {
   pending_payment: '待付款',
@@ -49,9 +37,16 @@ export default function OrderPage() {
   const [payLoading, setPayLoading] = useState(false)
 
   const load = () => {
-    fetchOrders().then(setOrders).catch(() => {}).finally(() => setLoading(false))
+    listBuyerOrders().then(setOrders).catch(err => setMsg(err.message || '加载订单失败')).finally(() => setLoading(false))
   }
   useEffect(load, [])
+
+  // 监听订单刷新事件（竞拍成交后自动刷新）
+  useEffect(() => {
+    const handler = () => { load() }
+    window.addEventListener('order:refresh', handler)
+    return () => window.removeEventListener('order:refresh', handler)
+  }, [])
 
   const filtered = activeTab === 'all' ? orders : orders.filter(o => o.status === activeTab)
 
@@ -120,9 +115,22 @@ export default function OrderPage() {
       {selected ? (
         <div className="panel">
           <h3>订单 #{selected.id}</h3>
+          <div className="order-product-summary">
+            {selected.productImage ? (
+              <img className="order-product-thumb" src={selected.productImage} alt={productName(selected)} />
+            ) : (
+              <div className="order-product-thumb placeholder">[商品]</div>
+            )}
+            <div className="order-product-copy">
+              <div className="order-product-title">{productName(selected)}</div>
+              <div className="order-product-seller">下单商家：{sellerName(selected)}</div>
+              <div className="order-product-final">成交价 ¥{formatCents(selected.finalPriceCents)}</div>
+            </div>
+          </div>
           <div className="order-detail">
             <div className="info-row"><span>竞拍</span><span>#{selected.auctionId}</span></div>
-            <div className="info-row"><span>商品</span><span>#{selected.productId}</span></div>
+            <div className="info-row"><span>商品</span><span>{productName(selected)}</span></div>
+            <div className="info-row"><span>下单商家</span><span>{sellerName(selected)}</span></div>
             <div className="info-row"><span>金额</span><span className="price">¥{formatCents(selected.finalPriceCents)}</span></div>
             <div className="info-row"><span>状态</span><span className={statusClass[selected.status]}>{statusLabel[selected.status]}</span></div>
             <div className="info-row"><span>创建时间</span><span>{new Date(selected.createdAt).toLocaleString('zh-CN')}</span></div>
@@ -202,22 +210,33 @@ export default function OrderPage() {
           <div className="card-list">
             {filtered.map(o => (
               <div key={o.id} className="panel order-card" onClick={() => handleSelect(o.id)}>
-                <div className="order-card-row">
-                  <span>订单 #{o.id}</span>
-                  <span className={`order-status ${statusClass[o.status]}`}>{statusLabel[o.status]}</span>
-                </div>
-                <div className="order-card-row">
-                  <span>竞拍 #{o.auctionId}</span>
-                  <span className="price">¥{formatCents(o.finalPriceCents)}</span>
+                <div className="order-card-main">
+                  {o.productImage ? (
+                    <img className="order-card-thumb" src={o.productImage} alt={productName(o)} />
+                  ) : (
+                    <div className="order-card-thumb placeholder">[商品]</div>
+                  )}
+                  <div className="order-card-info">
+                    <div className="order-card-title-row">
+                      <span className="order-card-title">{productName(o)}</span>
+                      <span className={`order-status ${statusClass[o.status]}`}>{statusLabel[o.status]}</span>
+                    </div>
+                    <div className="order-card-seller">下单商家：{sellerName(o)}</div>
+                    <div className="order-card-price-row">
+                      <span>成交价</span>
+                      <span className="price">¥{formatCents(o.finalPriceCents)}</span>
+                    </div>
+                  </div>
                 </div>
                 <div className="order-card-row meta">
+                  <span>订单 #{o.id} · 竞拍 #{o.auctionId}</span>
                   <span>{new Date(o.createdAt).toLocaleString('zh-CN')}</span>
                 </div>
               </div>
             ))}
             {filtered.length === 0 && (
               <div className="empty-state-box">
-                <div className="empty-icon">📋</div>
+                <div className="empty-icon">[订单]</div>
                 <p>{activeTab === 'all' ? '暂无订单' : `暂无${statusLabel[activeTab]}订单`}</p>
               </div>
             )}

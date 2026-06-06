@@ -35,7 +35,7 @@ type RegisterInput struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Nickname string `json:"nickname"`
-	Role     string `json:"role"` // user / seller / anchor，默认 user
+	Role     string `json:"role"` // buyer / seller，默认 buyer
 }
 
 // LoginInput 是登录请求的输入参数。

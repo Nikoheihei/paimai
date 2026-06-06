@@ -1,6 +1,12 @@
 const BASE = '/api'
 const TOKEN_KEY = 'paimai_admin_token'
 
+type ApiEnvelope<T> = {
+  code: number
+  message?: string
+  data: T
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -19,6 +25,25 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+async function parseApiResponse<T>(res: Response): Promise<ApiEnvelope<T>> {
+  const text = await res.text()
+  if (!text.trim()) {
+    throw new Error(`服务返回空响应（HTTP ${res.status}）`)
+  }
+
+  try {
+    return JSON.parse(text) as ApiEnvelope<T>
+  } catch {
+    const preview = text.replace(/\s+/g, ' ').slice(0, 80)
+    const isHtml = text.trimStart().startsWith('<')
+    throw new Error(
+      isHtml
+        ? `服务返回了 HTML 页面（HTTP ${res.status}），请确认后端服务和 /api 代理正常`
+        : `服务返回非 JSON 响应（HTTP ${res.status}）：${preview}`,
+    )
+  }
+}
+
 async function apiFetch<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...authHeaders(),
@@ -28,23 +53,23 @@ async function apiFetch<T = any>(path: string, options: RequestInit = {}): Promi
     headers['Content-Type'] = 'application/json'
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
-  const body = await res.json()
+  const body = await parseApiResponse<T>(res)
   if (body.code === 401) { clearToken(); window.location.hash = '#/login'; throw new Error('登录已过期') }
-  if (body.code !== 0) throw new Error(body.message)
+  if (body.code !== 0) throw new Error(body.message || `请求失败（code ${body.code}）`)
   return body.data as T
 }
 
 export type AuthResult = { userId: number; username: string; nickname: string; token: string }
 export async function login(username: string, password: string): Promise<AuthResult> {
   const res = await fetch(`${BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
+  const body = await parseApiResponse<AuthResult>(res)
+  if (body.code !== 0) throw new Error(body.message || `请求失败（code ${body.code}）`)
   return body.data
 }
 export async function register(username: string, password: string, nickname?: string): Promise<AuthResult> {
-  const res = await fetch(`${BASE}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, nickname }) })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
+  const res = await fetch(`${BASE}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, nickname, role: 'seller' }) })
+  const body = await parseApiResponse<AuthResult>(res)
+  if (body.code !== 0) throw new Error(body.message || `请求失败（code ${body.code}）`)
   return body.data
 }
 
@@ -89,9 +114,36 @@ export async function getRoomStats(roomId: number): Promise<{ roomId: number; on
   return apiFetch(`/admin/rooms/${roomId}/stats`)
 }
 
-export type Auction = { id: number; roomId: number; productId: number; mode: string; startPriceCents: number; currentPriceCents: number; bidIncrementCents: number; capPriceCents: number; reservePriceCents: number | null; startAt: string; endAt: string; status: string; winnerUserId: number | null }
-export async function createAuction(roomId: number, productId: number, mode: string, startPriceCents: number, bidIncrementCents: number, capPriceCents: number, startAt?: string, endAt?: string): Promise<Auction> {
-  return apiFetch('/admin/auctions', { method: 'POST', body: JSON.stringify({ roomId, productId, mode, startPriceCents, bidIncrementCents, capPriceCents, startAt: startAt || null, endAt: endAt || null }) })
+export type Auction = { id: number; roomId: number; productId: number; mode: string; startPriceCents: number; currentPriceCents: number; bidIncrementCents: number; capPriceCents: number; reservePriceCents: number | null; extendThresholdSec?: number; extendDurationSec?: number; startAt: string; endAt: string; status: string; winnerUserId: number | null }
+export async function createAuction(
+  roomId: number,
+  productId: number,
+  mode: string,
+  startPriceCents: number,
+  bidIncrementCents: number,
+  capPriceCents: number,
+  reservePriceCents?: number | null,
+  extendThresholdSec?: number,
+  extendDurationSec?: number,
+  startAt?: string,
+  endAt?: string,
+): Promise<Auction> {
+  return apiFetch('/admin/auctions', {
+    method: 'POST',
+    body: JSON.stringify({
+      roomId,
+      productId,
+      mode,
+      startPriceCents,
+      bidIncrementCents,
+      capPriceCents,
+      reservePriceCents: reservePriceCents ?? null,
+      extendThresholdSec: extendThresholdSec || 0,
+      extendDurationSec: extendDurationSec || 0,
+      startAt: startAt || null,
+      endAt: endAt || null,
+    }),
+  })
 }
 export async function listAuctions(roomId?: number, status?: string): Promise<Auction[]> {
   const params = new URLSearchParams()
@@ -134,7 +186,7 @@ export async function uploadImage(file: File): Promise<string> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   })
-  const body = await res.json()
+  const body = await parseApiResponse<{ url: string }>(res)
   if (body.code !== 0) throw new Error(body.message || '上传失败')
   return body.data.url
 }

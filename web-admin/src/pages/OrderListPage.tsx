@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listOrders, payOrder, type Order } from '../api/client'
+import { listOrders, type Order } from '../api/client'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
 
@@ -30,6 +30,13 @@ export default function OrderListPage() {
   const load = () => { listOrders().then(setOrders).catch(() => {}) }
   useEffect(load, [])
 
+  // 监听订单刷新事件（竞拍成交后自动刷新）
+  useEffect(() => {
+    const handler = () => { load() }
+    window.addEventListener('order:refresh', handler)
+    return () => window.removeEventListener('order:refresh', handler)
+  }, [])
+
   useEffect(() => {
     let result = orders
     if (search.trim()) {
@@ -42,10 +49,6 @@ export default function OrderListPage() {
     setFiltered(result)
     setPage(1)
   }, [search, statusFilter, dateFrom, dateTo, orders])
-
-  const handlePay = async (id: number) => {
-    try { await payOrder(id); setMsg(`订单 #${id} 已支付`); load(); setDetail(null) } catch (err: any) { setMsg(err.message) }
-  }
 
   const handleExport = () => {
     const rows = filtered.map(o => `${o.id},${o.auctionId},${o.buyerId},${o.finalPriceCents},${o.status},${o.createdAt}`)
@@ -63,8 +66,8 @@ export default function OrderListPage() {
   return (
     <div className="admin-page">
       <div className="page-header">
-        <h1>📋 订单管理</h1>
-        <button className="admin-btn" onClick={handleExport}>📥 导出 CSV</button>
+        <h1>订单管理</h1>
+        <button className="admin-btn" onClick={handleExport}>导出 CSV</button>
       </div>
 
       {msg && <div className="toast" onClick={() => setMsg('')}>{msg}</div>}
@@ -108,9 +111,7 @@ export default function OrderListPage() {
                   <td><span className={`status-badge ${statusBadgeClass[o.status] || 'badge-gray'}`}>{statusLabel[o.status] || o.status}</span></td>
                   <td>{new Date(o.createdAt).toLocaleString('zh-CN')}</td>
                   <td>
-                    {o.status === 'pending_payment' && (
-                      <button className="admin-btn small primary" onClick={(e) => { e.stopPropagation(); handlePay(o.id) }}>模拟支付</button>
-                    )}
+                    <span className={`status-badge ${statusBadgeClass[o.status] || 'badge-gray'}`}>{statusLabel[o.status] || o.status}</span>
                   </td>
                 </tr>
               ))}
@@ -126,7 +127,7 @@ export default function OrderListPage() {
         </>
       ) : (
         <div className="empty-state-box">
-          <div className="empty-icon">📋</div>
+          <div className="empty-icon">[订单]</div>
           <p>暂无订单</p>
         </div>
       )}
@@ -150,9 +151,6 @@ export default function OrderListPage() {
               {detail.paidAt && <div className="info-row"><span>支付时间</span><span>{new Date(detail.paidAt).toLocaleString('zh-CN')}</span></div>}
             </div>
             <div className="modal-footer">
-              {detail.status === 'pending_payment' && (
-                <button className="admin-btn primary" onClick={() => handlePay(detail.id)}>模拟支付</button>
-              )}
               <button className="admin-btn" onClick={() => setDetail(null)}>关闭</button>
             </div>
           </div>

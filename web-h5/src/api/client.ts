@@ -10,6 +10,12 @@ const BASE = '/api'
 
 const TOKEN_KEY = 'paimai_token'
 
+type ApiEnvelope<T> = {
+  code: number
+  message?: string
+  data: T
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -24,6 +30,37 @@ export function clearToken(): void {
 
 export function isLoggedIn(): boolean {
   return !!getToken()
+}
+
+async function parseApiResponse<T>(res: Response): Promise<ApiEnvelope<T>> {
+  const text = await res.text()
+  if (!text.trim()) {
+    throw new Error(`服务返回空响应（HTTP ${res.status}）`)
+  }
+
+  try {
+    return JSON.parse(text) as ApiEnvelope<T>
+  } catch {
+    const preview = text.replace(/\s+/g, ' ').slice(0, 80)
+    const isHtml = text.trimStart().startsWith('<')
+    throw new Error(
+      isHtml
+        ? `服务返回了 HTML 页面（HTTP ${res.status}），请确认后端服务和 /api 代理正常`
+        : `服务返回非 JSON 响应（HTTP ${res.status}）：${preview}`,
+    )
+  }
+}
+
+async function parseApiData<T>(res: Response, expiredMessage = '登录已过期'): Promise<T> {
+  const body = await parseApiResponse<T>(res)
+  if (body.code === 401) {
+    clearToken()
+    throw new Error(expiredMessage)
+  }
+  if (body.code !== 0) {
+    throw new Error(body.message || `请求失败（code ${body.code}）`)
+  }
+  return body.data
 }
 
 // --- 认证 API ---
@@ -47,11 +84,9 @@ export async function register(username: string, password: string, nickname?: st
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password, nickname }),
+    body: JSON.stringify({ username, password, nickname, role: 'buyer' }),
   })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return parseApiData<AuthResult>(res)
 }
 
 export async function login(username: string, password: string): Promise<AuthResult> {
@@ -60,22 +95,14 @@ export async function login(username: string, password: string): Promise<AuthRes
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return parseApiData<AuthResult>(res)
 }
 
 export async function getMe(): Promise<MeResult> {
   const res = await fetch(`${BASE}/auth/me`, {
     headers: authHeaders(),
   })
-  const body = await res.json()
-  if (body.code === 401) {
-    clearToken()
-    throw new Error('登录已过期，请重新登录')
-  }
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return parseApiData<MeResult>(res, '登录已过期，请重新登录')
 }
 
 // --- 通用请求工具 ---
@@ -97,13 +124,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
     headers['Content-Type'] = 'application/json'
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
-  const body = await res.json()
-  if (body.code === 401) {
-    clearToken()
-    throw new Error('登录已过期')
-  }
-  if (body.code !== 0) throw new Error(body.message)
-  return body.data
+  return parseApiData(res)
 }
 
 // --- 业务 API ---
@@ -169,9 +190,17 @@ export type Order = {
   addressSnapshot: string
   createdAt: string
   paidAt: string | null
+  productName?: string
+  productImage?: string
+  sellerNickname?: string
 }
 
-export async function payBuyerOrder(orderId: number, addressId?: number, addressSnapshot?: string): Promise<any> {
+export async function listBuyerOrders(auctionId?: number): Promise<Order[]> {
+  const params = auctionId ? `?auctionId=${auctionId}` : ''
+  return apiFetch(`/orders${params}`)
+}
+
+export async function payBuyerOrder(orderId: number, addressId?: number, addressSnapshot?: string): Promise<Order> {
   return apiFetch(`/orders/${orderId}/pay`, {
     method: 'POST',
     body: JSON.stringify({ addressId, addressSnapshot }),
@@ -217,9 +246,8 @@ export async function uploadImage(file: File): Promise<string> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   })
-  const body = await res.json()
-  if (body.code !== 0) throw new Error(body.message || '上传失败')
-  return body.data.url
+  const body = await parseApiData<{ url: string }>(res)
+  return body.url
 }
 
 // --- 地址管理 API ---

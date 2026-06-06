@@ -154,7 +154,7 @@ export default function AddressListPage() {
           ))}
           {addresses.length === 0 && (
             <div className="empty-state-box">
-              <div className="empty-icon">📍</div>
+              <div className="empty-icon">[位置]</div>
               <p>暂无收货地址</p>
               <p className="sub">点击右上角添加</p>
             </div>

@@ -110,11 +110,14 @@ func main() {
 		handler.RegisterAdminSettleRoutes(adminGroup, settleService)
 		handler.RegisterRoomRoutes(adminGroup, roomService, hub)
 
+		// 买家端订单路由（鉴权，非 Admin）
+		handler.RegisterBuyerSettleRoutes(r, settleService)
+
 		handler.RegisterUploadRoutes(r)
 		handler.RegisterAuthMeRoute(r, authService)
 		handler.RegisterAddressRoutes(r.Group("/api"))
 
-// 启动时结算已过期的 running 竞拍
+		// 启动时结算已过期的 running 竞拍
 		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 			log.Printf("启动时结算了 %d 个过期竞拍", count)
 		}

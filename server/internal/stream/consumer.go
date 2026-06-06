@@ -35,10 +35,10 @@ type RedisStreamClient interface {
 var consumerName = fmt.Sprintf("instance-%d", os.Getpid())
 
 const (
-	streamKey       = "auction:events"
-	consumerGroup   = "auction:processors"
-	maxStreamLen    = 10000
-	pollInterval    = 2 * time.Second
+	streamKey     = "auction:events"
+	consumerGroup = "auction:processors"
+	maxStreamLen  = 10000
+	pollInterval  = 2 * time.Second
 )
 
 // Event 是 Stream 中每条消息的载荷结构。
@@ -212,6 +212,12 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 	switch evt.Type {
 	case "bid.accepted":
 		c.handleBidAccepted(ctx, &evt, message.ID)
+	case "order.created":
+		c.handleOrderCreated(ctx, &evt, message.ID)
+	case "product.created":
+		c.handleProductCreated(ctx, &evt, message.ID)
+	case "auction.created", "auction.updated":
+		// 竞拍列表变化只需要广播给客户端，前端收到后重新拉取权威列表。
 	default:
 		log.Printf("[stream] 未知事件类型: %s", evt.Type)
 	}
@@ -219,7 +225,11 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 	// WS 广播（所有类型的事件都推送给房间客户端）
 	wsMsg, err := ws.NewWsMessage(evt.Type, evt)
 	if err == nil {
-		c.hub.Broadcast(evt.RoomID, wsMsg)
+		if evt.RoomID == 0 {
+			c.hub.BroadcastAll(wsMsg)
+		} else {
+			c.hub.Broadcast(evt.RoomID, wsMsg)
+		}
 	}
 
 	c.ack(ctx, message.ID)
@@ -274,6 +284,30 @@ func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event, messageID 
 	writer.Set(ctx, lastTsKey, time.Now().UnixMilli(), 86400*time.Second)
 
 	// sold 状态已在 Pipeline 的 HSET 中设置（payload.status 为 "sold"），无需重复写入
+}
+
+// handleOrderCreated 处理订单创建事件：通过 WS 推送通知用户和商家刷新订单。
+func (c *Consumer) handleOrderCreated(ctx context.Context, evt *Event, messageID string) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
+		log.Printf("[stream] 解析 order.created payload 失败: %v", err)
+		return
+	}
+	// 订单创建事件不需要写入 Redis，只需通过 WS 广播即可
+	// 前端收到后会自动刷新订单列表
+	_ = payload
+}
+
+// handleProductCreated 处理商品创建事件：通过 WS 推送通知客户端刷新商品列表。
+func (c *Consumer) handleProductCreated(ctx context.Context, evt *Event, messageID string) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
+		log.Printf("[stream] 解析 product.created payload 失败: %v", err)
+		return
+	}
+	// 商品创建事件不需要写入 Redis，只需通过 WS 广播即可
+	// 前端收到后会自动刷新商品列表
+	_ = payload
 }
 
 // extractEventUUID 从事件 payload 中提取 eventUUID 字段。

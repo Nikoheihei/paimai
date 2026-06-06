@@ -9,9 +9,9 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"errors"
 	"paimai/internal/model"
 	"paimai/internal/repository"
-	"errors"
 )
 
 // mockAdminStore 实现 repository.AdminStore 的最小 mock，只覆盖 outbox 相关方法。
@@ -90,33 +90,69 @@ func (s *mockAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) e
 }
 
 func (s *mockAdminStore) UpdateProduct(_ context.Context, product *model.Product) error { return nil }
-func (s *mockAdminStore) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) { return nil, nil }
+func (s *mockAdminStore) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
+	return nil, nil
+}
 
 // 实现 AdminStore 其他必须方法（最小 stub）
 func (s *mockAdminStore) CreateProduct(ctx context.Context, product *model.Product) error { return nil }
-func (s *mockAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) { return nil, nil }
-func (s *mockAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) { return nil, nil }
-func (s *mockAdminStore) DeleteProduct(ctx context.Context, id uint64) error { return nil }
+func (s *mockAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) DeleteProduct(ctx context.Context, id uint64) error              { return nil }
 func (s *mockAdminStore) CreateAuction(ctx context.Context, auction *model.Auction) error { return nil }
-func (s *mockAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) { return nil, nil }
+func (s *mockAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
+	return nil, nil
+}
 func (s *mockAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error { return nil }
-func (s *mockAdminStore) ListAuctions(ctx context.Context, filter repository.AuctionFilter) ([]model.Auction, error) { return nil, nil }
+func (s *mockAdminStore) ListAuctions(ctx context.Context, filter repository.AuctionFilter) ([]model.Auction, error) {
+	return nil, nil
+}
 func (s *mockAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error { return nil }
-func (s *mockAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) { return nil, nil }
+func (s *mockAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
+	return nil, nil
+}
 func (s *mockAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error { return nil }
-func (s *mockAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) { return nil, nil }
+func (s *mockAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
+	return nil, nil
+}
 func (s *mockAdminStore) CreateOrder(ctx context.Context, order *model.Order) error { return nil }
-func (s *mockAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) { return nil, nil }
-func (s *mockAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) { return nil, nil }
+func (s *mockAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) {
+	return nil, nil
+}
 func (s *mockAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error { return nil }
-func (s *mockAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) { return nil, nil }
-func (s *mockAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) { return nil, nil }
-func (s *mockAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error { return nil }
-func (s *mockAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) { return nil, nil }
-func (s *mockAdminStore) WithTx(ctx context.Context, fn func(repository.AdminStore) error) error { return fn(s) }
-func (s *mockAdminStore) CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error { return nil }
+func (s *mockAdminStore) ListOrders(ctx context.Context) ([]model.Order, error)     { return nil, nil }
+func (s *mockAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
+	return nil
+}
+func (s *mockAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
+	return nil, nil
+}
+func (s *mockAdminStore) WithTx(ctx context.Context, fn func(repository.AdminStore) error) error {
+	return fn(s)
+}
+func (s *mockAdminStore) CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error {
+	return nil
+}
 func (s *mockAdminStore) CreateBid(ctx context.Context, bid *model.Bid) error { return nil }
-func (s *mockAdminStore) UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error { return nil }
+func (s *mockAdminStore) UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error {
+	return nil
+}
 
 // mockRedisClientOutbox 是 OutboxPoller 用的 Redis mock（只需要 XAdd）。
 type mockRedisClientOutbox struct {

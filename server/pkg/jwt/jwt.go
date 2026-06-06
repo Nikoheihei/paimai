@@ -23,7 +23,7 @@ type Claims struct {
 	UserID   uint64 `json:"userId"`
 	Username string `json:"username"`
 	Nickname string `json:"nickname"`
-	Role     string `json:"role"` // "buyer", "seller", "anchor"
+	Role     string `json:"role"` // "buyer", "seller"
 	jwt.RegisteredClaims
 }
 

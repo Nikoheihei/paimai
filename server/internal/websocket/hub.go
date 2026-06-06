@@ -11,7 +11,7 @@ import (
 type HubEventType int
 
 const (
-	EventRegister   HubEventType = iota
+	EventRegister HubEventType = iota
 	EventUnregister
 	EventDead
 )
@@ -143,6 +143,35 @@ func (h *Hub) Broadcast(roomID uint64, message []byte) {
 			default:
 				// 慢客户端：仅发送到 dead channel，不处理生命周期
 				// Hub.Run 会统一 delete + close(send)
+				select {
+				case h.events <- HubEvent{Type: EventDead, Client: client}:
+				default:
+					log.Printf("[websocket] dead channel full, client %d dropped", client.userID)
+				}
+			}
+		}()
+	}
+}
+
+func (h *Hub) BroadcastAll(message []byte) {
+	h.mu.RLock()
+	clients := make([]*Client, 0)
+	for _, room := range h.rooms {
+		for client := range room.clients {
+			clients = append(clients, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, client := range clients {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+				}
+			}()
+			select {
+			case client.send <- message:
+			default:
 				select {
 				case h.events <- HubEvent{Type: EventDead, Client: client}:
 				default:

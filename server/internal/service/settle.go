@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -30,10 +31,18 @@ func NewSettleService(adminStore repository.AdminStore) *SettleService {
 // SettleResult 是单次结算的结果。
 type SettleResult struct {
 	AuctionID       uint64  `json:"auctionId"`
-	Settled         bool    `json:"settled"`         // 是否执行了结算（已结算过的返回 false）
-	Status          string  `json:"status"`          // 结算后的竞拍状态
+	Settled         bool    `json:"settled"`           // 是否执行了结算（已结算过的返回 false）
+	Status          string  `json:"status"`            // 结算后的竞拍状态
 	OrderID         *uint64 `json:"orderId,omitempty"` // 成交时生成的订单 ID
 	FinalPriceCents int64   `json:"finalPriceCents"`
+}
+
+// OrderDetail 是买家端订单展示 DTO，在原订单字段基础上补充商品和商家信息。
+type OrderDetail struct {
+	model.Order
+	ProductName    string `json:"productName"`
+	ProductImage   string `json:"productImage"`
+	SellerNickname string `json:"sellerNickname"`
 }
 
 // SettleAuction 对指定竞拍执行结算。
@@ -136,6 +145,25 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 		if err := tx.CreateOrder(ctx, order); err != nil {
 			return err
 		}
+
+		// 写入 Outbox 事件，通知前端刷新订单
+		eventPayload, _ := json.Marshal(map[string]interface{}{
+			"type":      "order.created",
+			"auctionId": auction.ID,
+			"orderId":   order.ID,
+			"buyerId":   order.BuyerID,
+			"sellerId":  order.SellerID,
+			"roomId":    auction.RoomID,
+		})
+		if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
+			EventType: "order.created",
+			Payload:   string(eventPayload),
+			Status:    "pending",
+			EventUUID: fmt.Sprintf("order-%d-%d", auction.ID, order.ID),
+		}); err != nil {
+			return err
+		}
+
 		result = &SettleResult{
 			AuctionID:       auction.ID,
 			Settled:         true,
@@ -199,6 +227,28 @@ func (s *SettleService) PayOrder(ctx context.Context, orderID uint64, input PayO
 	return order, nil
 }
 
+// PayBuyerOrder 模拟支付当前买家的订单，并校验订单归属。
+func (s *SettleService) PayBuyerOrder(ctx context.Context, orderID uint64, buyerID uint64, input PayOrderInput) (*OrderDetail, error) {
+	if buyerID == 0 {
+		return nil, ErrUnauthorized
+	}
+	order, err := s.adminStore.GetOrder(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if order.BuyerID != buyerID {
+		return nil, ErrUnauthorized
+	}
+	paid, err := s.PayOrder(ctx, orderID, input)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichOrder(ctx, *paid), nil
+}
+
 // GetOrder 查询订单详情。
 func (s *SettleService) GetOrder(ctx context.Context, orderID uint64) (*model.Order, error) {
 	order, err := s.adminStore.GetOrder(ctx, orderID)
@@ -211,6 +261,21 @@ func (s *SettleService) GetOrder(ctx context.Context, orderID uint64) (*model.Or
 	return order, nil
 }
 
+// GetBuyerOrder 查询当前买家的订单详情，并校验订单归属。
+func (s *SettleService) GetBuyerOrder(ctx context.Context, orderID uint64, buyerID uint64) (*OrderDetail, error) {
+	if buyerID == 0 {
+		return nil, ErrUnauthorized
+	}
+	order, err := s.GetOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if order.BuyerID != buyerID {
+		return nil, ErrUnauthorized
+	}
+	return s.enrichOrder(ctx, *order), nil
+}
+
 // ListOrders 返回订单列表（按创建时间倒序）。
 func (s *SettleService) ListOrders(ctx context.Context) ([]model.Order, error) {
 	return s.adminStore.ListOrders(ctx)
@@ -219,6 +284,35 @@ func (s *SettleService) ListOrders(ctx context.Context) ([]model.Order, error) {
 // ListSellerOrders 返回指定商家的订单列表。
 func (s *SettleService) ListSellerOrders(ctx context.Context, sellerID uint64) ([]model.Order, error) {
 	return s.adminStore.ListOrdersBySeller(ctx, sellerID)
+}
+
+// ListBuyerOrders 返回指定买家的订单列表。
+func (s *SettleService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]OrderDetail, error) {
+	orders, err := s.adminStore.ListOrdersByBuyer(ctx, buyerID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichOrders(ctx, orders), nil
+}
+
+func (s *SettleService) enrichOrders(ctx context.Context, orders []model.Order) []OrderDetail {
+	result := make([]OrderDetail, 0, len(orders))
+	for _, order := range orders {
+		result = append(result, *s.enrichOrder(ctx, order))
+	}
+	return result
+}
+
+func (s *SettleService) enrichOrder(ctx context.Context, order model.Order) *OrderDetail {
+	detail := &OrderDetail{Order: order}
+	if product, err := s.adminStore.GetProduct(ctx, order.ProductID); err == nil && product != nil {
+		detail.ProductName = product.Name
+		detail.ProductImage = product.ImageURL
+	}
+	if seller, err := s.adminStore.GetUser(ctx, order.SellerID); err == nil && seller != nil {
+		detail.SellerNickname = seller.Nickname
+	}
+	return detail
 }
 
 // SettleExpiredAuctions 结算所有已过期但仍在 running 的竞拍（启动时调用）。

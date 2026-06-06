@@ -2,22 +2,22 @@ package service
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/json"
-	"crypto/md5"
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 	"paimai/internal/model"
 	"paimai/internal/repository"
 	"paimai/internal/stream"
-	"gorm.io/gorm"
 	redisclient "paimai/pkg/redis"
 )
 
@@ -31,8 +31,8 @@ type BidRejectError struct {
 }
 
 func (e *BidRejectError) Error() string { return e.Message }
-// ErrInvalidInput 是输入参数校验失败的通用错误。
 
+// ErrInvalidInput 是输入参数校验失败的通用错误。
 
 // PublicService 聚合用户端直播间、竞拍详情、排行榜和出价能力。
 //
@@ -217,10 +217,10 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		set, err := s.redis.Master.SetNX(ctx, inflightKey, "1", 30*time.Second).Result()
 		if err != nil || !set {
 			return &BidResult{
-				Accepted: false,
+				Accepted:  false,
 				AuctionID: auctionID,
-				UserID:   input.UserID,
-				Status:   "IN_FLIGHT",
+				UserID:    input.UserID,
+				Status:    "IN_FLIGHT",
 			}, &BidRejectError{Code: "IN_FLIGHT", Message: bidRejectMessage("IN_FLIGHT")}
 		}
 
@@ -350,8 +350,8 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 
 		// 构造结果
 		// 缓存最终响应到 Redis 并返回
-	// 此文本会在外部被替换 — 这里先标记位置
-	result = &BidResult{
+		// 此文本会在外部被替换 — 这里先标记位置
+		result = &BidResult{
 			Accepted:          true,
 			AuctionID:         auctionID,
 			UserID:            input.UserID,
@@ -738,6 +738,7 @@ func (s *PublicService) readCachedBidResult(ctx context.Context, idemKey string,
 	cachedResult.IdempotentReplay = true
 	return &cachedResult
 }
+
 // assembleDuplicateBidResult 在唯一索引冲突时查询 MySQL 已有的出价记录，
 // 拼装完整 BidResult 供缓存和返回。
 func (s *PublicService) assembleDuplicateBidResult(tx repository.AdminStore, ctx context.Context, auctionID uint64, input BidInput, auction *model.Auction) *BidResult {
@@ -746,14 +747,14 @@ func (s *PublicService) assembleDuplicateBidResult(tx repository.AdminStore, ctx
 	if err != nil || len(bids) == 0 {
 		// 降级：用 input 中的金额
 		return &BidResult{
-			Accepted:         true,
-			IdempotentReplay: true,
-			AuctionID:        auctionID,
-			UserID:           input.UserID,
-			AmountCents:      input.AmountCents,
+			Accepted:          true,
+			IdempotentReplay:  true,
+			AuctionID:         auctionID,
+			UserID:            input.UserID,
+			AmountCents:       input.AmountCents,
 			CurrentPriceCents: auction.CurrentPriceCents,
-			Status:           auction.Status,
-			EndAt:            auction.EndAt.Format(time.RFC3339Nano),
+			Status:            auction.Status,
+			EndAt:             auction.EndAt.Format(time.RFC3339Nano),
 		}
 	}
 
@@ -772,16 +773,17 @@ func (s *PublicService) assembleDuplicateBidResult(tx repository.AdminStore, ctx
 	}
 
 	return &BidResult{
-		Accepted:         true,
-		IdempotentReplay: true,
-		AuctionID:        auctionID,
-		UserID:           input.UserID,
-		AmountCents:      amount,
+		Accepted:          true,
+		IdempotentReplay:  true,
+		AuctionID:         auctionID,
+		UserID:            input.UserID,
+		AmountCents:       amount,
 		CurrentPriceCents: auction.CurrentPriceCents,
-		Status:           auction.Status,
+		Status:            auction.Status,
 		EndAt:             auction.EndAt.Format(time.RFC3339Nano),
 	}
 }
+
 // formatEndAt 格式化结束时间为 RFC3339Nano 字符串。
 func formatEndAt(t time.Time) string {
 	if t.IsZero() {
@@ -815,13 +817,25 @@ func settleWithRetry(ctx context.Context, auctionID uint64, settle *SettleServic
 	log.Printf("[settle] 结算竞拍 %d 重试 %d 次后仍失败: %v", auctionID, retries, lastErr)
 }
 
-
-// ListBuyerOrders 查询买家订单列表。
-func (s *PublicService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+// ListBuyerOrders 查询买家订单列表，可通过 auctionID 过滤。
+func (s *PublicService) ListBuyerOrders(ctx context.Context, buyerID uint64, auctionID uint64) ([]model.Order, error) {
 	if buyerID == 0 {
 		return nil, fmt.Errorf("%w: buyerId is required", ErrInvalidInput)
 	}
-	return s.store.ListBuyerOrders(ctx, buyerID)
+	orders, err := s.store.ListBuyerOrders(ctx, buyerID)
+	if err != nil {
+		return nil, err
+	}
+	if auctionID > 0 {
+		filtered := make([]model.Order, 0, len(orders))
+		for _, o := range orders {
+			if o.AuctionID == auctionID {
+				filtered = append(filtered, o)
+			}
+		}
+		return filtered, nil
+	}
+	return orders, nil
 }
 
 // GetBuyerOrder 查询买家单个订单详情。
@@ -840,7 +854,7 @@ func (s *PublicService) GetBuyerOrder(ctx context.Context, id uint64, userID uin
 }
 
 // PayBuyerOrder 买家模拟支付订单。
-func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64, userID uint64) (*model.Order, error) {
+func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64, userID uint64, input PayOrderInput) (*model.Order, error) {
 	if orderID == 0 {
 		return nil, fmt.Errorf("%w: orderId is required", ErrInvalidInput)
 	}
@@ -855,7 +869,7 @@ func (s *PublicService) PayBuyerOrder(ctx context.Context, orderID uint64, userI
 	if order.BuyerID != userID {
 		return nil, fmt.Errorf("%w: order does not belong to user", ErrNotFound)
 	}
-	return s.settle.PayOrder(ctx, orderID, PayOrderInput{})
+	return s.settle.PayOrder(ctx, orderID, input)
 }
 
 // uuid 生成一个简单的 v4 风格 UUID（无横线，32 位 hex），用于事件去重。

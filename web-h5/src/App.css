@@ -237,7 +237,7 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  max-width: calc(33vw * 0.875);
+  max-width: min(300px, calc(100% - 84px));
   border-radius: var(--radius-sm);
   background: var(--glass-strong);
   backdrop-filter: blur(20px) saturate(180%);
@@ -254,6 +254,18 @@ html, body {
 }
 .anchor-header .anchor-name {
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.anchor-header .anchor-info {
+  min-width: 0;
+  flex: 1;
+}
+.anchor-header .anchor-viewers {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 .anchor-header .anchor-meta-row {
   font-size: 10px;
@@ -264,9 +276,14 @@ html, body {
   font-size: 10px;
   border-radius: 10px;
 }
-.anchor-header .anchor-more-link {
+.anchor-header .anchor-more-link,
+.anchor-header .anchor-more-btn {
   font-size: 10px;
   padding: 2px 4px;
+  border: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
 }
 .anchor-avatar {
   width: 36px; height: 36px; border-radius: 50%;
@@ -1151,6 +1168,127 @@ html, body {
 .status-pending { color: #ffa726; }
 .status-paid { color: var(--green); }
 .status-closed { color: var(--text-muted); }
+
+.order-card {
+  cursor: pointer;
+  transition: transform .15s, background .15s;
+}
+.order-card:active { transform: scale(.99); }
+.order-card-main {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+.order-card-thumb,
+.order-product-thumb {
+  width: 76px;
+  aspect-ratio: 1;
+  flex: 0 0 76px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: rgba(255,255,255,.08);
+  border: 1px solid var(--glass-border);
+}
+.order-card-thumb.placeholder,
+.order-product-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.order-card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.order-card-title-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.order-card-title {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.35;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.order-status {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+}
+.order-card-seller {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-card-price-row,
+.order-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.order-card-price-row {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.order-card-row.meta {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-border);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.order-product-summary {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin: 12px 0 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--glass-border);
+}
+.order-product-thumb {
+  width: 88px;
+  flex-basis: 88px;
+}
+.order-product-copy {
+  min-width: 0;
+  flex: 1;
+}
+.order-product-title {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin-bottom: 6px;
+}
+.order-product-seller {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-product-final {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--primary);
+}
 
 /* ================================================================
    SECTION 16: 收货地址管理

@@ -5,6 +5,7 @@
 
 import { useState, useRef } from 'react'
 import Toast from './Toast'
+import { uploadImage } from '../api/client'
 
 type Props = {
   value?: string
@@ -21,18 +22,8 @@ export default function ImageUploader({ value, onChange, placeholder = '点击�
     if (file.size > 5 * 1024 * 1024) { Toast.error('图片不能超过 5MB'); return }
 
     try {
-      // 调用后端上传 API
-      const formData = new FormData()
-      formData.append('file', file)
-      const token = localStorage.getItem('paimai_admin_token')
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      })
-      const body = await res.json()
-      if (body.code !== 0) throw new Error(body.message || '上传失败')
-      onChange(body.data.url)
+      const url = await uploadImage(file)
+      onChange(url)
       Toast.success('图片已上传')
     } catch (e: any) {
       Toast.error(e.message || '上传失败')
