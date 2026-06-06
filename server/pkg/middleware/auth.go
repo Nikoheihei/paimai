@@ -59,22 +59,22 @@ func extractBearerToken(header string) string {
 	return ""
 }
 
-// AdminRequired 验证当前用户角色是否为管理员（seller/anchor），非管理员返回 403。
+// AdminRequired 验证当前用户角色是否为 seller，非 seller 返回 403。
 func AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("role")
 		if !exists {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    403,
-				"message": "forbidden: admin role required",
+				"message": "forbidden: seller role required",
 			})
 			return
 		}
 		roleStr, ok := role.(string)
-		if !ok || (roleStr != "seller" && roleStr != "anchor") {
+		if !ok || roleStr != "seller" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    403,
-				"message": "forbidden: admin role required",
+				"message": "forbidden: seller role required",
 			})
 			return
 		}

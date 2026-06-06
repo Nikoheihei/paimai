@@ -3,6 +3,15 @@ import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct,
 import ImageUploader from '../components/ImageUploader'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
+function yuanToCents(value: string, fallbackCents: number) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallbackCents
+  return Math.round(parsed * 100)
+}
+function optionalYuanToCents(value: string) {
+  if (!value.trim()) return null
+  return yuanToCents(value, 0)
+}
 
 type TabKey = 'products' | 'auctions'
 
@@ -25,12 +34,12 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [newAuctionProductId, setNewAuctionProductId] = useState(0)
   const [newAuctionMode, setNewAuctionMode] = useState<'sudden_death' | 'extension'>('sudden_death')
   const [newAuctionStartPrice, setNewAuctionStartPrice] = useState('0')
-  const [newAuctionIncrement, setNewAuctionIncrement] = useState('100')
-  const [newAuctionCap, setNewAuctionCap] = useState('10000')
+  const [newAuctionIncrement, setNewAuctionIncrement] = useState('1.00')
+  const [newAuctionCap, setNewAuctionCap] = useState('100.00')
   const [newAuctionReserve, setNewAuctionReserve] = useState('')
   const [newAuctionDuration, setNewAuctionDuration] = useState('300')
-  const [newAuctionExtendThreshold, setNewAuctionExtendThreshold] = useState('')
-  const [newAuctionExtendDuration, setNewAuctionExtendDuration] = useState('')
+  const [newAuctionExtendThreshold, setNewAuctionExtendThreshold] = useState('10')
+  const [newAuctionExtendDuration, setNewAuctionExtendDuration] = useState('15')
   const [showNewAuction, setShowNewAuction] = useState(false)
 
   const load = () => {
@@ -76,9 +85,12 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
         roomId,
         newAuctionProductId,
         newAuctionMode,
-        parseInt(newAuctionStartPrice) || 0,
-        parseInt(newAuctionIncrement) || 100,
-        parseInt(newAuctionCap) || 10000,
+        yuanToCents(newAuctionStartPrice, 0),
+        yuanToCents(newAuctionIncrement, 100),
+        yuanToCents(newAuctionCap, 10000),
+        optionalYuanToCents(newAuctionReserve),
+        newAuctionMode === 'extension' ? parseInt(newAuctionExtendThreshold) || 10 : 0,
+        newAuctionMode === 'extension' ? parseInt(newAuctionExtendDuration) || 15 : 0,
         undefined, undefined, // startAt/endAt 由后端计算
       )
       setMsg('竞拍已创建'); listAuctions(roomId).then(setAuctions)
@@ -102,10 +114,10 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   }
   const resetAuctionForm = () => {
     setNewAuctionProductId(0); setNewAuctionMode('sudden_death')
-    setNewAuctionStartPrice('0'); setNewAuctionIncrement('100')
-    setNewAuctionCap('10000'); setNewAuctionReserve('')
-    setNewAuctionDuration('300'); setNewAuctionExtendThreshold('')
-    setNewAuctionExtendDuration('')
+    setNewAuctionStartPrice('0'); setNewAuctionIncrement('1.00')
+    setNewAuctionCap('100.00'); setNewAuctionReserve('')
+    setNewAuctionDuration('300'); setNewAuctionExtendThreshold('10')
+    setNewAuctionExtendDuration('15')
   }
 
   if (!room) return <div className="admin-page"><p className="empty">加载中…</p></div>
@@ -125,17 +137,17 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
 
       {/* 操作栏 */}
       <div className="action-bar">
-        {room.status === 'offline' && <button className="admin-btn primary" onClick={handleGoLive}>📡 开播</button>}
+        {room.status === 'offline' && <button className="admin-btn primary" onClick={handleGoLive}>开播</button>}
         {room.status !== 'closed' && <button className="admin-btn danger" onClick={handleClose}>⏹ 关播</button>}
       </div>
 
       {/* Tab 切换 */}
       <div className="tab-bar">
         <button className={`tab-btn ${activeTab === 'products' ? 'active' : ''}`} onClick={() => setActiveTab('products')}>
-          📦 商品 ({products.length})
+          商品 ({products.length})
         </button>
         <button className={`tab-btn ${activeTab === 'auctions' ? 'active' : ''}`} onClick={() => setActiveTab('auctions')}>
-          ⚡ 竞拍 ({auctions.length})
+          竞拍 ({auctions.length})
         </button>
       </div>
 

@@ -301,43 +301,105 @@ async function main() {
   assert(`竞拍状态为 sold/settled（非 ${finalAuction?.status}）`, ended,
     `actual=${finalAuction?.status}`);
 
-  // ---- Phase 5: 订单与支付 ----
-  console.log('\n▸ Phase 5: 订单与支付');
+  // ---- Phase 5: 订单与支付（买家端）----
+  console.log('\n▸ Phase 5: 订单与支付（买家端）');
 
-  r = await request('GET', '/api/orders', { token: buyer1Token });
-  assert('买家1 订单列表可查', r.ok && r.data?.code === 0, `status=${r.status}`);
-  const buyer1Orders = r.data?.data || [];
-  assert('买家1 有订单', buyer1Orders.length >= 1, `count=${buyer1Orders.length}`);
+  // 查最终竞拍状态获取 winnerUserId
+  const winnerUserId = finalAuction?.winnerUserId;
+  console.log(`  竞拍 winnerUserId: ${winnerUserId}`);
 
-  const order = buyer1Orders.find(o => o.status === 'pending_payment');
-  if (order) {
-    assert('订单状态为 pending_payment', order.status === 'pending_payment', `status=${order.status}`);
-    const orderId = order.id;
+  // 动态确定赢家是 buyer1 还是 buyer2
+  const winnerToken = winnerUserId === buyer1Id ? buyer1Token :
+                     winnerUserId === buyer2Id ? buyer2Token : null;
+  const winnerName = winnerToken === buyer1Token ? '买家1' : '买家2';
 
-    // 地址 CRUD
-    console.log('  ▸ 地址管理');
-    r = await request('POST', '/api/addresses', {
-      token: buyer1Token,
-      json: { name: '张三', phone: '13800138000', province: '广东省', city: '深圳市',
-              district: '南山区', detail: '科技园南区A栋1001', isDefault: true },
-    });
-    assert('创建地址', r.ok && r.data?.code === 0, `status=${r.status}`);
-
-    r = await request('GET', '/api/addresses', { token: buyer1Token });
-    assert('查询地址列表', r.ok && r.data?.code === 0, `status=${r.status}`);
-    const addrs = r.data?.data || [];
-    assert('地址列表非空', addrs.length >= 1, `count=${addrs.length}`);
-
-    // 支付订单（带地址）
-    r = await request('POST', `/api/orders/${orderId}/pay`, {
-      token: buyer1Token,
-      json: { addressId: addrs[0].id },
-    });
-    assert('支付订单', r.ok && r.data?.code === 0, `status=${r.status} data=${JSON.stringify(r.data?.data)}`);
-    assert('支付后订单状态为 paid', r.data?.data?.status === 'paid',
-      JSON.stringify(r.data?.data));
+  if (!winnerToken) {
+    skip(`无人中标（winnerUserId=${winnerUserId}），跳过订单检查`);
   } else {
-    skip('买家1 无 pending_payment 订单');
+    console.log(`  ${winnerName} 是赢家，检查其订单`);
+
+    // --- 5a: 赢家订单 ---
+    r = await request('GET', '/api/orders', { token: winnerToken });
+    assert(`${winnerName} 订单列表可查`, r.ok && r.data?.code === 0, `status=${r.status}`);
+    const winnerOrders = r.data?.data || [];
+    assert(`${winnerName} 有订单`, winnerOrders.length >= 1, `count=${winnerOrders.length}`);
+
+    // 验证订单状态分布
+    const winPending = winnerOrders.filter(o => o.status === 'pending_payment');
+    assert(`${winnerName} 有待付款订单`, winPending.length >= 1,
+      `pending=${winPending.length} total=${winnerOrders.length}`);
+
+    const winPaid = winnerOrders.filter(o => o.status === 'paid');
+    console.log(`  ${winnerName} 订单: 共 ${winnerOrders.length} 单, 待付款 ${winPending.length}, 已付款 ${winPaid.length}`);
+
+    // --- 5b: 非赢家订单（应为空或仅有历史）---
+    const loserToken = winnerToken === buyer1Token ? buyer2Token : buyer1Token;
+    const loserName = loserToken === buyer1Token ? '买家1' : '买家2';
+    r = await request('GET', '/api/orders', { token: loserToken });
+    assert(`${loserName} 订单列表可查`, r.ok && r.data?.code === 0, `status=${r.status}`);
+    const loserOrders = r.data?.data || [];
+    console.log(`  ${loserName} 订单: 共 ${loserOrders.length} 单`);
+
+    // --- 5c: 支付流程（赢家）---
+    const order = winnerOrders.find(o => o.status === 'pending_payment');
+    if (order) {
+      assert('待付款订单状态为 pending_payment', order.status === 'pending_payment', `status=${order.status}`);
+      const orderId = order.id;
+
+      // 地址 CRUD
+      console.log('  ▸ 地址管理');
+      r = await request('POST', '/api/addresses', {
+        token: winnerToken,
+        json: { name: '张三', phone: '13800138000', province: '广东省', city: '深圳市',
+                district: '南山区', detail: '科技园南区A栋1001', isDefault: true },
+      });
+      assert('创建地址', r.ok && r.data?.code === 0, `status=${r.status}`);
+
+      r = await request('GET', '/api/addresses', { token: winnerToken });
+      assert('查询地址列表', r.ok && r.data?.code === 0, `status=${r.status}`);
+      const addrs = r.data?.data || [];
+      assert('地址列表非空', addrs.length >= 1, `count=${addrs.length}`);
+
+      // 支付订单（带地址快照）
+      console.log('  ▸ 支付订单');
+      r = await request('POST', `/api/orders/${orderId}/pay`, {
+        token: winnerToken,
+        json: { addressId: addrs[0].id, addressSnapshot: JSON.stringify(addrs[0]) },
+      });
+      assert('支付订单', r.ok && r.data?.code === 0,
+        `status=${r.status} data=${JSON.stringify(r.data?.data)}`);
+      assert('支付后订单状态为 paid', r.data?.data?.status === 'paid',
+        `actual=${r.data?.data?.status}`);
+      assert('支付后订单记录地址', !!r.data?.data?.addressSnapshot,
+        `addressSnapshot=${r.data?.data?.addressSnapshot}`);
+
+      // --- 5d: 幂等支付（重复支付同一订单）---
+      console.log('  ▸ 重复支付（幂等）');
+      r = await request('POST', `/api/orders/${orderId}/pay`, {
+        token: winnerToken,
+      });
+      assert('重复支付幂等返回 paid', r.ok && r.data?.code === 0,
+        `status=${r.status}`);
+      assert('重复支付状态仍为 paid', r.data?.data?.status === 'paid',
+        `actual=${r.data?.data?.status}`);
+
+      // --- 5e: 支付后刷新订单列表，验证待付款→已付款 ---
+      console.log('  ▸ 支付后刷新订单列表');
+      r = await request('GET', '/api/orders', { token: winnerToken });
+      assert('支付后订单列表可查', r.ok && r.data?.code === 0, `status=${r.status}`);
+      const refreshedOrders = r.data?.data || [];
+      const refreshedPending = refreshedOrders.filter(o => o.status === 'pending_payment');
+      const refreshedPaid = refreshedOrders.filter(o => o.status === 'paid');
+      assert('支付后该订单不在待付款中',
+        !refreshedPending.find(o => o.id === orderId),
+        `still pending: order ${orderId}`);
+      assert('支付后该订单在已付款中',
+        !!refreshedPaid.find(o => o.id === orderId),
+        `order ${orderId} not in paid list`);
+      console.log(`  刷新后: 待付款 ${refreshedPending.length}, 已付款 ${refreshedPaid.length}`);
+    } else {
+      skip(`${winnerName} 无 pending_payment 订单（可能已支付或未中标）`);
+    }
   }
 
   // ---- Phase 6: 商家管理端 ----

@@ -2,9 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"log"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -65,15 +66,15 @@ type ProductInput struct {
 // StartPriceCents / BidIncrementCents / CapPriceCents 会在服务层统一校验，
 // handler 只负责 JSON 绑定，不承载业务规则。
 type AuctionInput struct {
-	RoomID             uint64 `json:"roomId"`
-	ProductID          uint64 `json:"productId"`
-	Mode               string `json:"mode"`
-	StartPriceCents    int64  `json:"startPriceCents"`
-	BidIncrementCents  int64  `json:"bidIncrementCents"`
-	CapPriceCents      int64  `json:"capPriceCents"`
-	ReservePriceCents  *int64 `json:"reservePriceCents"`
-	ExtendThresholdSec int    `json:"extendThresholdSec"`
-	ExtendDurationSec  int    `json:"extendDurationSec"`
+	RoomID             uint64     `json:"roomId"`
+	ProductID          uint64     `json:"productId"`
+	Mode               string     `json:"mode"`
+	StartPriceCents    int64      `json:"startPriceCents"`
+	BidIncrementCents  int64      `json:"bidIncrementCents"`
+	CapPriceCents      int64      `json:"capPriceCents"`
+	ReservePriceCents  *int64     `json:"reservePriceCents"`
+	ExtendThresholdSec int        `json:"extendThresholdSec"`
+	ExtendDurationSec  int        `json:"extendDurationSec"`
 	StartAt            *time.Time `json:"startAt"`
 	EndAt              *time.Time `json:"endAt"`
 }
@@ -104,6 +105,7 @@ type CancelAuctionInput struct {
 }
 
 // CreateProduct 校验商品创建输入，并委托 repository 写入商品数据。
+// 商品创建成功后通过 Outbox 事件通知所有在线客户端刷新商品列表。
 func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input ProductInput) (*model.Product, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Name == "" {
@@ -116,10 +118,34 @@ func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input
 		ImageURL:    strings.TrimSpace(input.ImageURL),
 		Description: strings.TrimSpace(input.Description),
 	}
-	if err := s.store.CreateProduct(ctx, product); err != nil {
+
+	// 使用事务：创建商品 + 写入 Outbox 事件
+	var created *model.Product
+	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
+		if err := tx.CreateProduct(ctx, product); err != nil {
+			return err
+		}
+		created = product
+
+		// 写入 Outbox 事件，通知前端刷新商品列表
+		eventPayload, _ := json.Marshal(map[string]interface{}{
+			"type":        "product.created",
+			"productId":   product.ID,
+			"sellerId":    product.SellerID,
+			"name":        product.Name,
+			"imageUrl":    product.ImageURL,
+			"description": product.Description,
+		})
+		return tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
+			EventType: "product.created",
+			Payload:   string(eventPayload),
+			Status:    "pending",
+			EventUUID: fmt.Sprintf("product-%d", product.ID),
+		})
+	}); err != nil {
 		return nil, err
 	}
-	return product, nil
+	return created, nil
 }
 
 // ListProducts 查询后台商品列表，可按卖家 ID 做过滤。
@@ -173,6 +199,7 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 	if err := s.store.CreateAuction(ctx, auction); err != nil {
 		return nil, err
 	}
+	s.enqueueAuctionRefresh(ctx, "auction.created", auction)
 	return auction, nil
 }
 
@@ -217,6 +244,7 @@ func (s *AdminService) UpdateAuction(ctx context.Context, id uint64, input Aucti
 	if err := s.store.UpdateAuction(ctx, auction); err != nil {
 		return nil, err
 	}
+	s.enqueueAuctionRefresh(ctx, "auction.updated", auction)
 	return auction, nil
 }
 
@@ -252,6 +280,7 @@ func (s *AdminService) StartAuction(ctx context.Context, id uint64, input StartA
 		return nil, err
 	}
 	s.initAuctionCache(ctx, auction)
+	s.enqueueAuctionRefresh(ctx, "auction.updated", auction)
 	return auction, nil
 }
 
@@ -291,6 +320,7 @@ func (s *AdminService) transitionAuction(ctx context.Context, id uint64, event s
 	if err := s.store.UpdateAuction(ctx, auction); err != nil {
 		return nil, err
 	}
+	s.enqueueAuctionRefresh(ctx, "auction.updated", auction)
 	return auction, nil
 }
 
@@ -304,6 +334,26 @@ func (s *AdminService) getAuction(ctx context.Context, id uint64) (*model.Auctio
 		return nil, err
 	}
 	return auction, nil
+}
+
+func (s *AdminService) enqueueAuctionRefresh(ctx context.Context, eventType string, auction *model.Auction) {
+	eventID := fmt.Sprintf("%s-%d-%d", eventType, auction.ID, time.Now().UnixNano())
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      eventType,
+		"eventId":   eventID,
+		"auctionId": auction.ID,
+		"roomId":    auction.RoomID,
+		"productId": auction.ProductID,
+		"status":    auction.Status,
+	})
+	if err := s.store.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: eventType,
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: eventID,
+	}); err != nil {
+		log.Printf("[admin] enqueue auction refresh failed (auction=%d type=%s): %v", auction.ID, eventType, err)
+	}
 }
 
 // initAuctionCache 在竞拍启动时把权威快照写入 Redis 热数据。
@@ -433,6 +483,14 @@ func validateExtensionRules(input auctionRuleInput) error {
 		return fmt.Errorf("%w: extension mode requires positive extendThresholdSec and extendDurationSec", ErrInvalidInput)
 	}
 	return nil
+}
+
+// ptrIntToValue 将 *int 转为 int，nil 时返回 0。
+func ptrIntToValue(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // validateReserveRules 校验保留价模式必须配置非空保留价。

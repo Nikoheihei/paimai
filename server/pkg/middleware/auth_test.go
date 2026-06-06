@@ -119,8 +119,8 @@ func TestAdminRequiredSellerRole(t *testing.T) {
 	}
 }
 
-// TestAdminRequiredAnchorRole 验证 anchor 角色通过。
-func TestAdminRequiredAnchorRole(t *testing.T) {
+// TestAdminRequiredInvalidRole 验证非法角色返回 403。
+func TestAdminRequiredInvalidRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -135,8 +135,8 @@ func TestAdminRequiredAnchorRole(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200 for anchor, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for invalid role, got %d", w.Code)
 	}
 }
 

@@ -32,6 +32,8 @@ type Props = {
   onBack: () => void
 }
 
+const AUCTION_REFRESH_EVENTS = new Set(['product.created', 'auction.created', 'auction.updated'])
+
 function parseUserIdFromToken(): number {
   const token = getToken()
   if (!token) return 0
@@ -66,7 +68,13 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
   // WebSocket 连接
   const { connected, reconnect } = useWebSocket(roomId, userId, {
-    onMessage: (msg) => setLastMessage(msg),
+    onMessage: (msg) => {
+      setLastMessage(msg)
+      // 收到商品/竞拍变更事件，刷新竞拍列表
+      if (AUCTION_REFRESH_EVENTS.has(msg.type)) {
+        loadRoomAuctions()
+      }
+    },
     onConnected: () => console.log('[WS] 已连接'),
     onDisconnected: () => console.log('[WS] 已断开'),
   })
@@ -75,6 +83,14 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
   const [anchorInfo, setAnchorInfo] = useState<UserInfo | null>(null)
 
   // 加载房间信息 + 所有竞拍 + 用户信息
+  const loadRoomAuctions = useCallback(() => {
+    getRoomAuctions(roomId).then((list: ApiAuction[]) => {
+      setAllAuctions(list as unknown as Auction[])
+      const running = list.find(a => a.status === 'running')
+      if (running && !activeAuctionId) setActiveAuctionId(running.id)
+    })
+  }, [roomId, activeAuctionId])
+
   useEffect(() => {
     getRoom(roomId).then(r => {
       setRoomTitle(r.title); setCoverUrl(r.coverUrl)
@@ -90,13 +106,9 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
         })
       }
     })
-    getRoomAuctions(roomId).then((list: ApiAuction[]) => {
-      setAllAuctions(list as unknown as Auction[])
-      const running = list.find(a => a.status === 'running')
-      if (running) setActiveAuctionId(running.id)
-    })
+    loadRoomAuctions()
 
-  }, [roomId])
+  }, [roomId, loadRoomAuctions])
 
   // 模拟观看数波动 + 模拟弹幕
   useEffect(() => {
@@ -113,6 +125,17 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
       clearInterval(barrageTimer)
     }
   }, [connected])
+
+  // 关闭竞拍面板回到直播画面
+  const handleCloseAuction = useCallback(()=>{
+    setActiveAuctionId(null)
+  },[])
+
+  // 监听关闭竞拍面板事件
+  useEffect(() => {
+    window.addEventListener('auction:close', handleCloseAuction)
+    return () => window.removeEventListener('auction:close', handleCloseAuction)
+  }, [handleCloseAuction])
 
   // 商品名称和图片映射（优先使用后端返回的 productName）
   const productNames = useMemo(() => {
@@ -147,7 +170,14 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
   // 拍卖结束回调
   const handleAuctionEnd = useCallback((auction:Auction)=>{
     setEndedAuction(auction); setShowResultModal(true)
-  },[])
+    // 成交后刷新订单列表（如果用户是赢家，订单会出现在"我的订单"中）
+    if (auction.winnerUserId === userId) {
+      // 延迟一下让结算完成
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('order:refresh'))
+      }, 1000)
+    }
+  },[userId])
 
   // 结果弹窗关闭
   const handleResultClose = useCallback(()=>{
@@ -169,7 +199,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
   if (!userId) return (
     <div className="live-room-page" style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
         <div style={{textAlign:'center',color:'var(--text-muted)'}}>
-        <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
+        <div style={{fontSize:40,marginBottom:12}}>!</div>
         <div>无法识别用户身份</div>
         <button style={{marginTop:12,padding:'8px 20px',background:'var(--primary-grad)',border:'none',borderRadius:10,color:'#fff',fontWeight:700,cursor:'pointer'}}
           onClick={onBack}>返回登录</button>
@@ -194,15 +224,17 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
         )}
 
         {/* C+D: 竞拍面板（含排行榜） */}
-        <AuctionPanel roomId={roomId} userId={userId}
-          wsMessage={lastMessage} connected={connected}
-          activeAuctionId={activeAuctionId}
-          productName={activeProductName}
-          productImage={activeProductImage}
-          onAuctionEnd={(a) => { sound.playAuctionEnd(); handleAuctionEnd(a) }}
-          onOutbid={() => { sound.playOutbid() }}
-          onBidSuccess={() => { sound.playBidSuccess() }}
-        />
+        {activeAuctionId && (
+          <AuctionPanel roomId={roomId} userId={userId}
+            wsMessage={lastMessage} connected={connected}
+            activeAuctionId={activeAuctionId}
+            productName={activeProductName}
+            productImage={activeProductImage}
+            onAuctionEnd={(a) => { sound.playAuctionEnd(); handleAuctionEnd(a) }}
+            onOutbid={() => { sound.playOutbid() }}
+            onBidSuccess={() => { sound.playBidSuccess() }}
+          />
+        )}
 
         {/* 返回按钮 */}
         <button className="back-btn" onClick={onBack} title="返回">
@@ -227,7 +259,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
       {/* 音效开关 */}
       <button className="sound-toggle" onClick={sound.toggle} title={sound.enabled ? '关闭音效' : '开启音效'}>
-        {sound.enabled ? '🔊' : '🔇'}
+        {sound.enabled ? '开' : '关'}
       </button>
 
       {/* E: 底部工具栏 */}
@@ -244,11 +276,11 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
           }}
         />
         <button className="bt-icon-btn" title="分享"
-          onClick={() => Toast.show('📤 分享功能开发中')}>📤</button>
-        <button className={`bt-icon-btn ${false?'liked':''}`} title="点赞"
-          onClick={() => Toast.success('❤️ 点赞 +1')}>❤</button>
+          onClick={() => Toast.show('分享功能开发中')}>分享</button>
+        <button className="bt-icon-btn" title="点赞"
+          onClick={() => Toast.success('点赞 +1')}>赞</button>
         <button className="bt-cart-btn" title="购物车/商品"
-          onClick={() => Toast.show('🛒 购物车功能开发中')}>🛒</button>
+          onClick={() => Toast.show('购物车功能开发中')}>购物车</button>
       </div>
 
       {/* F: 拍卖结果弹窗 */}

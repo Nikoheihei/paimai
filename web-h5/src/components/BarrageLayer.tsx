@@ -35,9 +35,9 @@ export default function BarrageLayer({ messages, maxVisible = 15 }: Props) {
   useEffect(() => {
     if (messages.length === 0) return
     const latest = messages[messages.length - 1]
-    if (visible.some(v => v.id === latest.id)) return
 
     setVisible(prev => {
+      if (prev.some(v => v.id === latest.id)) return prev
       const next = [...prev, latest]
       if (next.length > maxVisible) next.shift()
       return next
@@ -48,8 +48,9 @@ export default function BarrageLayer({ messages, maxVisible = 15 }: Props) {
   }, [messages, maxVisible, removeItem])
 
   useEffect(() => {
+    const currentTimers = timers.current
     return () => {
-      Object.values(timers.current).forEach(clearTimeout)
+      Object.values(currentTimers).forEach(clearTimeout)
     }
   }, [])
 

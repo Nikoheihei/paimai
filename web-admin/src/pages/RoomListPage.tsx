@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listRooms, createRoom, goLive, closeRoom, type LiveRoom } from '../api/client'
+import ImageUploader from '../components/ImageUploader'
 
 export default function RoomListPage() {
   const [rooms, setRooms] = useState<LiveRoom[]>([])
@@ -90,8 +91,8 @@ export default function RoomListPage() {
               <input type="text" placeholder="输入直播间标题" value={title} onChange={e => setTitle(e.target.value)} required />
             </div>
             <div className="field">
-              <label>封面图 URL（可选）</label>
-              <input type="text" placeholder="https://..." value={coverUrl} onChange={e => setCoverUrl(e.target.value)} />
+              <label>封面图（可选）</label>
+              <ImageUploader value={coverUrl} onChange={setCoverUrl} placeholder="点击或拖拽上传直播间封面" />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
@@ -142,7 +143,7 @@ export default function RoomListPage() {
         </table>
       ) : (
         <div className="empty-state-box">
-          <div className="empty-icon">📺</div>
+          <div className="empty-icon">[直播间]</div>
           <p>暂无直播间</p>
           <p className="sub">点击右上角"创建直播间"开始</p>
         </div>

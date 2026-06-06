@@ -4,8 +4,9 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { getToken, getAuction, getRanking, placeBid, type Auction, type RankingItem, type BidResult } from '../api/client'
+import { getToken, getAuction, getRanking, placeBid, payBuyerOrder, listBuyerOrders, type Auction, type RankingItem, type BidResult } from '../api/client'
 import type { WsMessage } from '../hooks/useWebSocket'
 import Countdown from '../components/Countdown'
 import Toast from '../components/Toast'
@@ -33,7 +34,13 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   const [bidStatus, setBidStatus] = useState<'idle' | 'sending' | 'ok' | 'fail'>('idle')
   const [customAmount, setCustomAmount] = useState('')
   const [lastMessage, setLastMessage] = useState<WsMessage | null>(null)
+  const [showPayModal, setShowPayModal] = useState(false)
+  const [payCountdown, setPayCountdown] = useState(300)
+  const [payLoading, setPayLoading] = useState(false)
+  const [paidAuctionIds, setPaidAuctionIds] = useState<number[]>([])
   const idemCounter = useRef(0)
+  const payTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const payTriggeredRef = useRef<number | null>(null)
 
   const { connected: _wsConnected } = useWebSocket(auction?.roomId || 0, userId, {
     onMessage: (msg) => setLastMessage(msg),
@@ -55,6 +62,73 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
     }
   }, [lastMessage, auction, load])
 
+  const stopPayCountdown = useCallback(() => {
+    if (payTimerRef.current) {
+      clearInterval(payTimerRef.current)
+      payTimerRef.current = null
+    }
+  }, [])
+
+  const startPayCountdown = useCallback(() => {
+    stopPayCountdown()
+    setPayCountdown(300)
+    payTimerRef.current = setInterval(() => {
+      setPayCountdown(prev => {
+        if (prev <= 1) {
+          stopPayCountdown()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }, [stopPayCountdown])
+
+  const closePayModal = useCallback(() => {
+    setShowPayModal(false)
+    stopPayCountdown()
+  }, [stopPayCountdown])
+
+  const soldWinnerAuctionId = auction?.status === 'sold' && auction.winnerUserId === userId
+    ? auction.id
+    : null
+
+  // 成交后自动弹出支付倒计时（每个成交竞拍只触发一次）
+  useEffect(() => {
+    if (!soldWinnerAuctionId || paidAuctionIds.includes(soldWinnerAuctionId)) return
+    if (payTriggeredRef.current === soldWinnerAuctionId) return
+    payTriggeredRef.current = soldWinnerAuctionId
+    setShowPayModal(true)
+    startPayCountdown()
+  }, [soldWinnerAuctionId, paidAuctionIds, startPayCountdown])
+
+  useEffect(() => () => stopPayCountdown(), [stopPayCountdown])
+
+  const handlePay = async () => {
+    if (!auction) return
+    setPayLoading(true)
+    try {
+      const orders = await listBuyerOrders(auction.id)
+      if (orders.length === 0) {
+        Toast.error('订单未生成，请稍后重试')
+        setPayLoading(false)
+        return
+      }
+      const order = orders[0]
+      await payBuyerOrder(order.id)
+      setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
+      Toast.success('支付成功！')
+      setShowPayModal(false)
+      stopPayCountdown()
+      payTriggeredRef.current = auction.id
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      load()
+    } catch (err: any) {
+      Toast.error(err.message || '支付失败')
+    } finally {
+      setPayLoading(false)
+    }
+  }
+
   const handleBid = async (amountCents: number) => {
     if (!auction || bidStatus === 'sending') return
     setBidStatus('sending')
@@ -75,15 +149,10 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
     }
   }
 
-  const quickBids = useMemo(() => {
-    if (!auction) return []
+  const quickBidAmount = useMemo(() => {
+    if (!auction) return 0
     const base = auction.currentPriceCents > 0 ? auction.currentPriceCents : auction.startPriceCents
-    const inc = auction.bidIncrementCents
-    return [
-      base + inc,
-      base + inc * 2,
-      base + inc * 5,
-    ].filter(v => v <= auction.capPriceCents || auction.capPriceCents === 0)
+    return base + auction.bidIncrementCents
   }, [auction])
 
   if (!auction) return <div className="panel pending">加载中…</div>
@@ -92,7 +161,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   const price = auction.currentPriceCents > 0 ? auction.currentPriceCents : auction.startPriceCents
 
   return (
-    <div className="auction-detail-page">
+    <div className="auction-detail-page" style={{ transform: 'scale(0.667)', transformOrigin: 'top center', height: '150%', overflow: 'hidden' }}>
       {/* 顶部导航 */}
       <header className="detail-header">
         <button className="back-btn" onClick={onBack}>←</button>
@@ -133,11 +202,9 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
       {isRunning && (
         <div className="detail-bid-bar">
           <div className="quick-bids">
-            {quickBids.map((amt, i) => (
-              <button key={i} className="quick-bid-btn" onClick={() => handleBid(amt)}>
-                +¥{formatCents(amt - price)}
-              </button>
-            ))}
+            <button className="quick-bid-btn" onClick={() => handleBid(quickBidAmount)}>
+              +¥{formatCents(auction!.bidIncrementCents)}
+            </button>
           </div>
           <div className="custom-bid-row">
             <input
@@ -160,8 +227,42 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
 
       {!isRunning && (
         <div className="detail-ended-notice">
-          {auction.status === 'sold' ? '🎉 竞拍已成交' : auction.status === 'failed' ? '❌ 竞拍流拍' : '⏸ 竞拍未开始'}
+          {auction.status === 'sold' ? '竞拍已成交' : auction.status === 'failed' ? '竞拍流拍' : '竞拍未开始'}
         </div>
+      )}
+
+      {/* 支付弹窗 */}
+      {showPayModal && auction?.status === 'sold' && auction.winnerUserId === userId && createPortal(
+        <div className="modal-overlay" onClick={closePayModal}>
+          <div className="modal-inner" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">恭喜成交！</div>
+            <div className="modal-body">
+              <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>成交价</div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--primary)' }}>¥{formatCents(auction.currentPriceCents)}</div>
+              </div>
+              <div style={{ textAlign: 'center', fontSize: 14, color: '#ff4757', fontWeight: 700 }}>
+                ⏰ 支付倒计时: {Math.floor(payCountdown / 60)}:{String(payCountdown % 60).padStart(2, '0')}
+              </div>
+              {payCountdown === 0 && (
+                <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>
+                  订单已关闭
+                </div>
+              )}
+            </div>
+            <div className="modal-btn-row">
+              <button className="modal-btn modal-cancel" onClick={closePayModal}>稍后再付</button>
+              <button
+                className="modal-btn modal-confirm"
+                disabled={payLoading || payCountdown === 0}
+                onClick={handlePay}
+              >
+                {payLoading ? '支付中...' : '立即支付'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

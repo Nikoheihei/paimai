@@ -9,7 +9,7 @@ type User struct {
 	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
 	Nickname  string    `gorm:"size:255;not null" json:"nickname"`
 	AvatarURL string    `gorm:"size:512" json:"avatarUrl"`
-	Role      string    `gorm:"type:enum('buyer','seller','anchor');default:'buyer';not null" json:"role"`
+	Role      string    `gorm:"type:enum('buyer','seller');default:'buyer';not null" json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

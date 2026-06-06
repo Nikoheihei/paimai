@@ -36,7 +36,10 @@ export default function RoomListPage() {
       const data = body.data || []
       setRooms(data)
       setFiltered(data)
-    } catch {}
+    } catch {
+      setRooms([])
+      setFiltered([])
+    }
   }, [])
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
@@ -72,7 +75,7 @@ export default function RoomListPage() {
     <div className="room-list-page" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       {/* 顶部搜索栏 */}
       <div className="home-search-bar">
-        <span className="search-icon">🔍</span>
+        <span className="search-icon">搜索</span>
         <input
           type="text"
           placeholder="搜索直播间..."
@@ -84,7 +87,7 @@ export default function RoomListPage() {
       </div>
 
       {/* 下拉刷新指示器 */}
-      {refreshing && <div className="refresh-indicator">🔄 刷新中...</div>}
+      {refreshing && <div className="refresh-indicator">刷新中...</div>}
 
       {filtered.length === 0 ? (
         <div className="panel empty-state">

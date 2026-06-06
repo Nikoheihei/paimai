@@ -1,8 +1,8 @@
 package repository
 
 import (
-	"fmt"
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -33,6 +33,7 @@ type AdminStore interface {
 	GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error)
 	UpdateRoom(ctx context.Context, room *model.LiveRoom) error
 	ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error)
+	GetUser(ctx context.Context, id uint64) (*model.User, error)
 
 	CreateOrder(ctx context.Context, order *model.Order) error
 	GetOrder(ctx context.Context, id uint64) (*model.Order, error)
@@ -40,6 +41,7 @@ type AdminStore interface {
 	UpdateOrder(ctx context.Context, order *model.Order) error
 	ListOrders(ctx context.Context) ([]model.Order, error)
 	ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error)
+	ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error)
 	UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error
 	ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error)
 
@@ -123,15 +125,35 @@ func (s *txGormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64)
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
 }
 
-
-
 // txGormAdminStore 中需要实现的 AdminStore 其余方法（事务传播）
-func (s *txGormAdminStore) CreateProduct(ctx context.Context, product *model.Product) error { return s.db.WithContext(ctx).Create(product).Error }
-func (s *txGormAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) { var p []model.Product; q := s.db.WithContext(ctx); if sellerID != nil { q = q.Where("seller_id = ?", *sellerID) }; err := q.Order("id DESC").Find(&p).Error; return p, err }
-func (s *txGormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) { var p model.Product; err := s.db.WithContext(ctx).First(&p, id).Error; return &p, err }
-func (s *txGormAdminStore) DeleteProduct(ctx context.Context, id uint64) error { return s.db.WithContext(ctx).Delete(&model.Product{}, id).Error }
-func (s *txGormAdminStore) CreateAuction(ctx context.Context, auction *model.Auction) error { return s.db.WithContext(ctx).Create(auction).Error }
-func (s *txGormAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) { var a model.Auction; err := s.db.WithContext(ctx).First(&a, id).Error; return &a, err }
+func (s *txGormAdminStore) CreateProduct(ctx context.Context, product *model.Product) error {
+	return s.db.WithContext(ctx).Create(product).Error
+}
+func (s *txGormAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) {
+	var p []model.Product
+	q := s.db.WithContext(ctx)
+	if sellerID != nil {
+		q = q.Where("seller_id = ?", *sellerID)
+	}
+	err := q.Order("id DESC").Find(&p).Error
+	return p, err
+}
+func (s *txGormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
+	var p model.Product
+	err := s.db.WithContext(ctx).First(&p, id).Error
+	return &p, err
+}
+func (s *txGormAdminStore) DeleteProduct(ctx context.Context, id uint64) error {
+	return s.db.WithContext(ctx).Delete(&model.Product{}, id).Error
+}
+func (s *txGormAdminStore) CreateAuction(ctx context.Context, auction *model.Auction) error {
+	return s.db.WithContext(ctx).Create(auction).Error
+}
+func (s *txGormAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
+	var a model.Auction
+	err := s.db.WithContext(ctx).First(&a, id).Error
+	return &a, err
+}
 func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error {
 	result := s.db.WithContext(ctx).
 		Model(&model.Auction{}).
@@ -153,17 +175,70 @@ func (s *txGormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auc
 	}
 	return nil
 }
-func (s *txGormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error) { var a []model.Auction; q := s.db.WithContext(ctx); if filter.RoomID != nil { q = q.Where("room_id = ?", *filter.RoomID) }; if filter.Status != "" { q = q.Where("status = ?", filter.Status) }; err := q.Order("id DESC").Find(&a).Error; return a, err }
-func (s *txGormAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error { return s.db.WithContext(ctx).Create(room).Error }
-func (s *txGormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) { var r model.LiveRoom; err := s.db.WithContext(ctx).First(&r, id).Error; return &r, err }
-func (s *txGormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error { return s.db.WithContext(ctx).Save(room).Error }
-func (s *txGormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) { var r []model.LiveRoom; err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&r).Error; return r, err }
-func (s *txGormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error { return s.db.WithContext(ctx).Create(order).Error }
-func (s *txGormAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) { var o model.Order; err := s.db.WithContext(ctx).First(&o, id).Error; return &o, err }
-func (s *txGormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) { var o model.Order; err := s.db.WithContext(ctx).Where("auction_id = ?", auctionID).First(&o).Error; return &o, err }
-func (s *txGormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error { return s.db.WithContext(ctx).Save(order).Error }
-func (s *txGormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Order("id DESC").Find(&o).Error; return o, err }
-func (s *txGormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) { var o []model.Order; err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&o).Error; return o, err }
+func (s *txGormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error) {
+	var a []model.Auction
+	q := s.db.WithContext(ctx)
+	if filter.RoomID != nil {
+		q = q.Where("room_id = ?", *filter.RoomID)
+	}
+	if filter.Status != "" {
+		q = q.Where("status = ?", filter.Status)
+	}
+	err := q.Order("id DESC").Find(&a).Error
+	return a, err
+}
+func (s *txGormAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error {
+	return s.db.WithContext(ctx).Create(room).Error
+}
+func (s *txGormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
+	var r model.LiveRoom
+	err := s.db.WithContext(ctx).First(&r, id).Error
+	return &r, err
+}
+func (s *txGormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error {
+	return s.db.WithContext(ctx).Save(room).Error
+}
+func (s *txGormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
+	var r []model.LiveRoom
+	err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&r).Error
+	return r, err
+}
+func (s *txGormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
+	var u model.User
+	err := s.db.WithContext(ctx).First(&u, id).Error
+	return &u, err
+}
+func (s *txGormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {
+	return s.db.WithContext(ctx).Create(order).Error
+}
+func (s *txGormAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
+	var o model.Order
+	err := s.db.WithContext(ctx).First(&o, id).Error
+	return &o, err
+}
+func (s *txGormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) {
+	var o model.Order
+	err := s.db.WithContext(ctx).Where("auction_id = ?", auctionID).First(&o).Error
+	return &o, err
+}
+func (s *txGormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error {
+	return s.db.WithContext(ctx).Save(order).Error
+}
+func (s *txGormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) {
+	var o []model.Order
+	err := s.db.WithContext(ctx).Order("id DESC").Find(&o).Error
+	return o, err
+}
+func (s *txGormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
+	var o []model.Order
+	err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&o).Error
+	return o, err
+}
+func (s *txGormAdminStore) ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+	var o []model.Order
+	err := s.db.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&o).Error
+	return o, err
+}
 func (s *txGormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
 	updates := map[string]interface{}{"status": status}
 	if paidAt != nil {
@@ -196,9 +271,14 @@ func (s *txGormAdminStore) UpdateProduct(ctx context.Context, product *model.Pro
 		"description": product.Description,
 	}).Error
 }
-func (s *txGormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) { var a []model.Auction; err := s.db.WithContext(ctx).Where("status = ? AND end_at <= ?", "running", time.Now()).Order("id ASC").Find(&a).Error; return a, err }
-func (s *txGormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error) error { panic("nested transaction not supported") }
-
+func (s *txGormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
+	var a []model.Auction
+	err := s.db.WithContext(ctx).Where("status = ? AND end_at <= ?", "running", time.Now()).Order("id ASC").Find(&a).Error
+	return a, err
+}
+func (s *txGormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error) error {
+	panic("nested transaction not supported")
+}
 
 func (s *GormAdminStore) CreateProduct(ctx context.Context, product *model.Product) error {
 	return s.db.WithContext(ctx).Create(product).Error
@@ -320,6 +400,14 @@ func (s *GormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64)
 	return rooms, nil
 }
 
+func (s *GormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
+	var user model.User
+	if err := s.db.WithContext(ctx).First(&user, id).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (s *GormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {
 	return s.db.WithContext(ctx).Create(order).Error
 }
@@ -355,6 +443,14 @@ func (s *GormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) 
 func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
 	var orders []model.Order
 	if err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+func (s *GormAdminStore) ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error) {
+	var orders []model.Order
+	if err := s.db.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	return orders, nil
@@ -439,5 +535,3 @@ func (s *GormAdminStore) MarkOutboxEventDone(ctx context.Context, id uint64) err
 func (s *GormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) error {
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
 }
-
-

@@ -126,6 +126,9 @@ export interface Order {
   status: OrderStatus
   createdAt: string
   paidAt: string | null
+  productName?: string
+  productImage?: string
+  sellerNickname?: string
 }
 
 // === 收货地址 ===

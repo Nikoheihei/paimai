@@ -26,7 +26,7 @@ export default function AnchorHeader({ info, viewerCount=0, onFollow, onMoreRoom
   }
 
   return (
-    <div className="anchor-header">
+    <div className={`anchor-header ${isPlaceholder ? 'placeholder' : ''}`}>
       {/* 头像 */}
       <div className="anchor-avatar">
         {info.avatarUrl ? (
@@ -39,12 +39,18 @@ export default function AnchorHeader({ info, viewerCount=0, onFollow, onMoreRoom
       {/* 信息区 */}
       <div className="anchor-info">
         <div className="anchor-name">{info.nickname || `用户${info.userId}`}</div>
+        <div className="anchor-viewers">{viewerCount.toLocaleString('zh-CN')} 在线</div>
       </div>
 
       {/* 关注按钮 */}
       <button className={`anchor-follow-btn ${followed?'followed':''}`} onClick={handleFollow}>
         {followed ? '已关注' : '+关注'}
       </button>
+      {onMoreRooms && (
+        <button className="anchor-more-btn" onClick={onMoreRooms} title="更多直播间">
+          ...
+        </button>
+      )}
     </div>
   )
 }

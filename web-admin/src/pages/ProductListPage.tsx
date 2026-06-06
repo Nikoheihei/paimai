@@ -7,7 +7,6 @@ export default function ProductListPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [showCreate, setShowCreate] = useState(false)
   // editing 状态预留用于后续编辑功能
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_editing, setEditing] = useState<Product | null>(null)
   const [msg, setMsg] = useState('')
 
@@ -58,7 +57,7 @@ export default function ProductListPage() {
   return (
     <div className="admin-page">
       <div className="page-header">
-        <h1>📦 商品管理</h1>
+        <h1>商品管理</h1>
         <button className="admin-btn primary" onClick={() => { setShowCreate(!showCreate); resetForm() }}>
           {showCreate ? '取消' : '+ 新建商品'}
         </button>
@@ -139,7 +138,7 @@ export default function ProductListPage() {
         </table>
       ) : (
         <div className="empty-state-box">
-          <div className="empty-icon">📦</div>
+          <div className="empty-icon">[商品]</div>
           <p>暂无商品</p>
           <p className="sub">点击右上角"新建商品"添加</p>
         </div>

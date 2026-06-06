@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 	"errors"
-	"testing"
 	"fmt"
+	"testing"
 	"time"
 
 	"gorm.io/gorm"
@@ -18,6 +18,7 @@ type adminStoreStub struct {
 	auctions      map[uint64]*model.Auction
 	orders        map[uint64]*model.Order
 	rooms         map[uint64]*model.LiveRoom
+	users         map[uint64]*model.User
 	nextProductID uint64
 	nextAuctionID uint64
 	nextOrderID   uint64
@@ -28,9 +29,10 @@ type adminStoreStub struct {
 func newAdminStoreStub() *adminStoreStub {
 	return &adminStoreStub{
 		products:      make(map[uint64]*model.Product),
-	auctions:      make(map[uint64]*model.Auction),
+		auctions:      make(map[uint64]*model.Auction),
 		orders:        make(map[uint64]*model.Order),
 		rooms:         make(map[uint64]*model.LiveRoom),
+		users:         make(map[uint64]*model.User),
 		nextProductID: 1,
 		nextAuctionID: 1,
 		nextOrderID:   1,
@@ -194,10 +196,29 @@ func (s *adminStoreStub) ListRoomsBySeller(_ context.Context, sellerID uint64) (
 	return []model.LiveRoom{}, nil
 }
 
+func (s *adminStoreStub) GetUser(_ context.Context, id uint64) (*model.User, error) {
+	user, ok := s.users[id]
+	if !ok {
+		return nil, gorm.ErrRecordNotFound
+	}
+	cp := *user
+	return &cp, nil
+}
+
 func (s *adminStoreStub) ListOrdersBySeller(_ context.Context, sellerID uint64) ([]model.Order, error) {
 	orders := make([]model.Order, 0)
 	for _, order := range s.orders {
 		if order.SellerID == sellerID {
+			orders = append(orders, *order)
+		}
+	}
+	return orders, nil
+}
+
+func (s *adminStoreStub) ListOrdersByBuyer(_ context.Context, buyerID uint64) ([]model.Order, error) {
+	orders := make([]model.Order, 0)
+	for _, order := range s.orders {
+		if order.BuyerID == buyerID {
 			orders = append(orders, *order)
 		}
 	}
@@ -275,8 +296,6 @@ func (s *adminStoreStub) UpdateProduct(_ context.Context, product *model.Product
 func (s *adminStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	return nil, nil
 }
-
-
 
 func TestAdminServiceAuctionLifecycle(t *testing.T) {
 	ctx := context.Background()
