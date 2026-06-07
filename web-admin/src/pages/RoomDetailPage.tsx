@@ -1,8 +1,18 @@
-import { useEffect, useState } from 'react'
-import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, listAuctions, publishAuction, startAuction, cancelAuction, createAuction, settleAuction, type LiveRoom, type Product, type Auction } from '../api/client'
+import { useCallback, useEffect, useState } from 'react'
+import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, listAuctions, updateAuction, publishAuction, startAuction, cancelAuction, createAuction, settleAuction, type LiveRoom, type Product, type Auction } from '../api/client'
 import ImageUploader from '../components/ImageUploader'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
+function durationFromAuction(a: Auction): string {
+  const start = new Date(a.startAt).getTime()
+  const end = new Date(a.endAt).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '300'
+  return String(Math.max(1, Math.round((end - start) / 1000)))
+}
+function normalizeDuration(value: string, fallback = 300): number {
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
 function yuanToCents(value: string, fallbackCents: number) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < 0) return fallbackCents
@@ -12,8 +22,13 @@ function optionalYuanToCents(value: string) {
   if (!value.trim()) return null
   return yuanToCents(value, 0)
 }
+function toDatetimeLocalValue(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
 
 type TabKey = 'products' | 'auctions'
+type ListingLaunchMode = 'manual' | 'scheduled' | 'immediate'
 
 type Props = { roomId: number; onBack: () => void }
 
@@ -21,6 +36,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [room, setRoom] = useState<LiveRoom | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [auctions, setAuctions] = useState<Auction[]>([])
+  const [auctionDurations, setAuctionDurations] = useState<Record<number, string>>({})
   const [activeTab, setActiveTab] = useState<TabKey>('products')
   const [msg, setMsg] = useState('')
 
@@ -30,9 +46,9 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [newProductImage, setNewProductImage] = useState('')
   const [showNewProduct, setShowNewProduct] = useState(false)
 
-  // 竞拍创建表单（完整字段）
+  // 上架配置表单（底层仍复用 auction 状态机）
   const [newAuctionProductId, setNewAuctionProductId] = useState(0)
-  const [newAuctionMode, setNewAuctionMode] = useState<'sudden_death' | 'extension'>('sudden_death')
+  const [newAuctionMode, setNewAuctionMode] = useState<'sudden_death' | 'extension' | 'reserve'>('sudden_death')
   const [newAuctionStartPrice, setNewAuctionStartPrice] = useState('0')
   const [newAuctionIncrement, setNewAuctionIncrement] = useState('1.00')
   const [newAuctionCap, setNewAuctionCap] = useState('100.00')
@@ -40,14 +56,29 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [newAuctionDuration, setNewAuctionDuration] = useState('300')
   const [newAuctionExtendThreshold, setNewAuctionExtendThreshold] = useState('10')
   const [newAuctionExtendDuration, setNewAuctionExtendDuration] = useState('15')
+  const [newListingLaunchMode, setNewListingLaunchMode] = useState<ListingLaunchMode>('manual')
+  const [newListingStartAt, setNewListingStartAt] = useState('')
   const [showNewAuction, setShowNewAuction] = useState(false)
 
-  const load = () => {
+  const syncAuctions = useCallback((list: Auction[]) => {
+    setAuctions(list)
+    setAuctionDurations(prev => {
+      const next = { ...prev }
+      list.forEach(a => {
+        if (!next[a.id]) next[a.id] = durationFromAuction(a)
+      })
+      return next
+    })
+  }, [])
+  const loadAuctions = useCallback(() => {
+    listAuctions(roomId).then(syncAuctions).catch(() => {})
+  }, [roomId, syncAuctions])
+  const load = useCallback(() => {
     getRoom(roomId).then(setRoom).catch(() => {})
     listProducts().then(setProducts).catch(() => {})
-    listAuctions(roomId).then(setAuctions).catch(() => {})
-  }
-  useEffect(load, [roomId])
+    loadAuctions()
+  }, [roomId, loadAuctions])
+  useEffect(load, [load])
 
   // === 房间操作 ===
   const handleGoLive = async () => {
@@ -73,6 +104,13 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     if (!confirm('确定删除该商品？')) return
     try { await deleteProduct(id); listProducts().then(setProducts); setMsg('商品已删除') } catch (err: any) { setMsg(err.message) }
   }
+  const handleConfigureListing = (product: Product) => {
+    setNewAuctionProductId(product.id)
+    setNewListingLaunchMode('manual')
+    setShowNewAuction(true)
+    setActiveTab('auctions')
+    setMsg(`正在为「${product.name}」配置上架`)
+  }
 
   // ImageUploader 的 onChange 返回 URL（base64 占位），这里直接用
   const handleImageUrlChange = (url: string) => { setNewProductImage(url) }
@@ -80,37 +118,81 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   // === 竞拍操作 ===
   const handleCreateAuction = async () => {
     if (!newAuctionProductId) { setMsg('请选择商品'); return }
+    const reservePrice = optionalYuanToCents(newAuctionReserve)
+    if (newAuctionMode === 'reserve' && reservePrice == null) {
+      setMsg('保留价模式需要填写保底价')
+      return
+    }
+    let startAt = new Date()
+    if (newListingLaunchMode === 'scheduled') {
+      if (!newListingStartAt) {
+        setMsg('请选择定时上架时间')
+        return
+      }
+      startAt = new Date(newListingStartAt)
+      if (!Number.isFinite(startAt.getTime())) {
+        setMsg('定时上架时间不正确')
+        return
+      }
+    }
     try {
-      await createAuction(
+      const durationSec = normalizeDuration(newAuctionDuration, 300)
+      const endAt = new Date(startAt.getTime() + durationSec * 1000)
+      const auction = await createAuction(
         roomId,
         newAuctionProductId,
         newAuctionMode,
         yuanToCents(newAuctionStartPrice, 0),
         yuanToCents(newAuctionIncrement, 100),
         yuanToCents(newAuctionCap, 10000),
-        optionalYuanToCents(newAuctionReserve),
+        reservePrice,
         newAuctionMode === 'extension' ? parseInt(newAuctionExtendThreshold) || 10 : 0,
         newAuctionMode === 'extension' ? parseInt(newAuctionExtendDuration) || 15 : 0,
-        undefined, undefined, // startAt/endAt 由后端计算
+        startAt.toISOString(),
+        endAt.toISOString(),
       )
-      setMsg('竞拍已创建'); listAuctions(roomId).then(setAuctions)
+      if (newListingLaunchMode === 'scheduled') {
+        await publishAuction(auction.id)
+      }
+      if (newListingLaunchMode === 'immediate') {
+        await publishAuction(auction.id)
+        await startAuction(auction.id, durationSec)
+      }
+      setAuctionDurations(prev => ({ ...prev, [auction.id]: String(durationSec) }))
+      setMsg(newListingLaunchMode === 'manual' ? '上架配置已保存' : newListingLaunchMode === 'scheduled' ? '定时上架已保存' : '商品已上架')
+      loadAuctions()
       setShowNewAuction(false)
       resetAuctionForm()
     } catch (err: any) { setMsg(err.message) }
   }
-  const handlePublish = async (id: number) => {
-    try { await publishAuction(id); setMsg('已发布'); listAuctions(roomId).then(setAuctions) } catch (err: any) { setMsg(err.message) }
+  const handleManualList = async (auction: Auction) => {
+    try {
+      if (auction.status === 'draft') {
+        await publishAuction(auction.id)
+      }
+      await startAuction(auction.id, normalizeDuration(auctionDurations[auction.id] || durationFromAuction(auction)))
+      setMsg('商品已上架')
+      loadAuctions()
+    } catch (err: any) { setMsg(err.message) }
   }
-  const handleStart = async (id: number) => {
-    try { await startAuction(id, parseInt(newAuctionDuration) || 300); setMsg('已开始'); listAuctions(roomId).then(setAuctions) } catch (err: any) { setMsg(err.message) }
+  const handleSaveDuration = async (auction: Auction) => {
+    const durationSec = normalizeDuration(auctionDurations[auction.id] || durationFromAuction(auction))
+    const scheduledStart = new Date(auction.startAt)
+    const startAt = auction.status === 'scheduled' && Number.isFinite(scheduledStart.getTime()) ? scheduledStart : new Date()
+    const endAt = new Date(startAt.getTime() + durationSec * 1000)
+    try {
+      await updateAuction(auction.id, { startAt: startAt.toISOString(), endAt: endAt.toISOString() })
+      setMsg(`上架计划 #${auction.id} 时长已保存为 ${durationSec} 秒`)
+      loadAuctions()
+    } catch (err: any) { setMsg(err.message) }
   }
   const handleCancel = async (id: number) => {
     const reason = prompt('取消原因（可选）') || ''
-    try { await cancelAuction(id, reason); setMsg('已取消'); listAuctions(roomId).then(setAuctions) } catch (err: any) { setMsg(err.message) }
+    try { await cancelAuction(id, reason); setMsg('已取消'); loadAuctions() } catch (err: any) { setMsg(err.message) }
   }
   const handleSettle = async (id: number) => {
     if (!confirm('确定手动结算此竞拍？')) return
-    try { await settleAuction(id); setMsg('已结算'); listAuctions(roomId).then(setAuctions) } catch (err: any) { setMsg(err.message) }
+    try { await settleAuction(id); setMsg('已结算'); loadAuctions() } catch (err: any) { setMsg(err.message) }
   }
   const resetAuctionForm = () => {
     setNewAuctionProductId(0); setNewAuctionMode('sudden_death')
@@ -118,6 +200,23 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     setNewAuctionCap('100.00'); setNewAuctionReserve('')
     setNewAuctionDuration('300'); setNewAuctionExtendThreshold('10')
     setNewAuctionExtendDuration('15')
+    setNewListingLaunchMode('manual'); setNewListingStartAt('')
+  }
+  const handleLaunchModeChange = (mode: ListingLaunchMode) => {
+    setNewListingLaunchMode(mode)
+    if (mode === 'scheduled' && !newListingStartAt) {
+      setNewListingStartAt(toDatetimeLocalValue(new Date(Date.now() + 60 * 1000)))
+    }
+  }
+  const listingSubmitText = () => {
+    if (newListingLaunchMode === 'scheduled') return '保存定时上架'
+    if (newListingLaunchMode === 'immediate') return '立即上架'
+    return '保存上架配置'
+  }
+  const auctionModeLabel = (mode: string) => {
+    if (mode === 'extension') return '延时'
+    if (mode === 'reserve') return '保留价'
+    return '绝杀'
   }
 
   if (!room) return <div className="admin-page"><p className="empty">加载中…</p></div>
@@ -144,19 +243,19 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
       {/* Tab 切换 */}
       <div className="tab-bar">
         <button className={`tab-btn ${activeTab === 'products' ? 'active' : ''}`} onClick={() => setActiveTab('products')}>
-          商品 ({products.length})
+          商品库 ({products.length})
         </button>
         <button className={`tab-btn ${activeTab === 'auctions' ? 'active' : ''}`} onClick={() => setActiveTab('auctions')}>
-          竞拍 ({auctions.length})
+          上架计划 ({auctions.length})
         </button>
       </div>
 
-      {/* ===== Tab: 商品管理 ===== */}
+      {/* ===== Tab: 商品库 ===== */}
       {activeTab === 'products' && (
         <>
           <section>
             <div className="section-header">
-              <h2>商品列表</h2>
+              <h2>商品库</h2>
               <button className="admin-btn primary" onClick={() => setShowNewProduct(!showNewProduct)}>
                 {showNewProduct ? '收起' : '+ 添加商品'}
               </button>
@@ -164,7 +263,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
 
             {showNewProduct && (
               <form className="create-form-card" onSubmit={(e) => { e.preventDefault(); handleCreateProduct() }}>
-                <h3>新增商品</h3>
+                <h3>新增商品档案</h3>
                 <div className="field">
                   <label>商品名称 *</label>
                   <input type="text" placeholder="输入商品名称" value={newProductName} onChange={e => setNewProductName(e.target.value)} required />
@@ -201,7 +300,10 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                       <td><strong>{p.name}</strong><br /><span className="meta">ID: #{p.id}</span></td>
                       <td className="desc-cell">{p.description || '-'}</td>
                       <td>
-                        <button className="admin-btn small danger" onClick={() => handleDeleteProduct(p.id)}>删除</button>
+                        <div className="action-cell">
+                          <button className="admin-btn small primary" onClick={() => handleConfigureListing(p)}>配置上架</button>
+                          <button className="admin-btn small danger" onClick={() => handleDeleteProduct(p.id)}>删除</button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -214,34 +316,49 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
         </>
       )}
 
-      {/* ===== Tab: 竞拍管理 ===== */}
+      {/* ===== Tab: 上架计划 ===== */}
       {activeTab === 'auctions' && (
         <>
           <section>
-            <div className="section-header"><h2>竞拍列表</h2></div>
+            <div className="section-header"><h2>上架计划</h2></div>
 
-            {/* 创建竞拍表单 */}
+            {/* 创建上架计划表单 */}
             {room.status !== 'closed' && (
               <div>
                 <button className="admin-btn primary" onClick={() => setShowNewAuction(!showNewAuction)} style={{ marginBottom: 12 }}>
-                  {showNewAuction ? '收起' : '+ 创建竞拍'}
+                  {showNewAuction ? '收起' : '+ 配置上架商品'}
                 </button>
                 {showNewAuction && (
                   <form className="create-form-card" onSubmit={(e) => { e.preventDefault(); handleCreateAuction() }}>
-                    <h3>新建竞拍</h3>
+                    <h3>商品上架配置</h3>
                     <div className="form-grid-2col">
                       <div className="field">
-                        <label>选择商品 *</label>
+                        <label>商品 *</label>
                         <select value={newAuctionProductId} onChange={e => setNewAuctionProductId(parseInt(e.target.value) || 0)}>
                           <option value={0}>选择商品…</option>
                           {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
                       </div>
                       <div className="field">
+                        <label>上架方式 *</label>
+                        <select value={newListingLaunchMode} onChange={e => handleLaunchModeChange(e.target.value as ListingLaunchMode)}>
+                          <option value="manual">先保存，稍后手动上架</option>
+                          <option value="scheduled">定时上架</option>
+                          <option value="immediate">保存后立即上架</option>
+                        </select>
+                      </div>
+                      {newListingLaunchMode === 'scheduled' && (
+                        <div className="field">
+                          <label>定时上架时间 *</label>
+                          <input type="datetime-local" value={newListingStartAt} onChange={e => setNewListingStartAt(e.target.value)} />
+                        </div>
+                      )}
+                      <div className="field">
                         <label>竞拍模式 *</label>
                         <select value={newAuctionMode} onChange={e => setNewAuctionMode(e.target.value as any)}>
-                          <option value="sudden_death">绝杀模式</option>
-                          <option value="extension">延时模式</option>
+                          <option value="sudden_death">绝杀竞拍</option>
+                          <option value="extension">延时竞拍</option>
+                          <option value="reserve">保留价竞拍</option>
                         </select>
                       </div>
                       <div className="field">
@@ -257,8 +374,8 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                         <input type="number" placeholder="100.00" step="0.01" value={newAuctionCap} onChange={e => setNewAuctionCap(e.target.value)} />
                       </div>
                       <div className="field">
-                        <label>保留价 (元, 可选)</label>
-                        <input type="number" placeholder="留空表示不设保留" value={newAuctionReserve} onChange={e => setNewAuctionReserve(e.target.value)} />
+                        <label>{newAuctionMode === 'reserve' ? '保底价 (元) *' : '保底价 (元, 可选)'}</label>
+                        <input type="number" placeholder="留空表示不设保底价" value={newAuctionReserve} onChange={e => setNewAuctionReserve(e.target.value)} />
                       </div>
                       <div className="field">
                         <label>时长 (秒)</label>
@@ -279,14 +396,14 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                     </div>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
                       <button type="button" className="admin-btn" onClick={() => { setShowNewAuction(false); resetAuctionForm() }}>取消</button>
-                      <button type="submit" className="admin-btn primary">创建竞拍</button>
+                      <button type="submit" className="admin-btn primary">{listingSubmitText()}</button>
                     </div>
                   </form>
                 )}
               </div>
             )}
 
-            {/* 竞拍表格 */}
+            {/* 上架计划表格 */}
             {auctions.length > 0 ? (
               <table className="data-table">
                 <thead>
@@ -296,6 +413,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                     <th>模式</th>
                     <th>起拍价</th>
                     <th>当前价</th>
+                    <th>上架时长</th>
                     <th>状态</th>
                     <th>操作</th>
                   </tr>
@@ -308,20 +426,34 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                       case 'sold': priceLabel = '落槌价'; priceVal = a.currentPriceCents; break
                       case 'running': priceLabel = a.currentPriceCents > 0 ? '当前最高价' : '起拍价'; priceVal = a.currentPriceCents > 0 ? a.currentPriceCents : a.startPriceCents; break
                       case 'scheduled': priceLabel = '起拍价'; break
+                      case 'draft': priceLabel = '起拍价'; break
                     }
 
                     return (
                       <tr key={a.id}>
                         <td>#{a.id}</td>
                         <td>{products.find(p => p.id === a.productId)?.name || `商品#${a.productId}`}</td>
-                        <td>{a.mode === 'sudden_death' ? '绝杀' : '延时'}</td>
+                        <td>{auctionModeLabel(a.mode)}</td>
                         <td>&yen;{formatCents(a.startPriceCents)}</td>
                         <td><strong>&yen;{formatCents(priceVal)}</strong><br/><span style={{ fontSize: 11, color: '#888' }}>{priceLabel}</span></td>
+                        <td>
+                          {(a.status === 'draft' || a.status === 'scheduled') ? (
+                            <input
+                              className="duration-input"
+                              type="number"
+                              min="1"
+                              value={auctionDurations[a.id] || durationFromAuction(a)}
+                              onChange={e => setAuctionDurations(prev => ({ ...prev, [a.id]: e.target.value }))}
+                            />
+                          ) : (
+                            <span>{durationFromAuction(a)} 秒</span>
+                          )}
+                        </td>
                         <td>{statusBadge(a.status)}</td>
                         <td>
                           <div className="action-cell">
-                            {a.status === 'draft' && <button className="admin-btn small" onClick={() => handlePublish(a.id)}>发布</button>}
-                            {a.status === 'scheduled' && <button className="admin-btn small primary" onClick={() => handleStart(a.id)}>开始</button>}
+                            {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small" onClick={() => handleSaveDuration(a)}>保存时长</button>}
+                            {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small primary" onClick={() => handleManualList(a)}>手动上架</button>}
                             {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small danger" onClick={() => handleCancel(a.id)}>取消</button>}
                             {(a.status === 'sold' || a.status === 'failed') && <button className="admin-btn small" onClick={() => handleSettle(a.id)}>结算</button>}
                           </div>
@@ -332,7 +464,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                 </tbody>
               </table>
             ) : (
-              <p className="empty">暂无竞拍，请先添加商品后创建竞拍</p>
+              <p className="empty">暂无上架计划，请先从商品库选择商品并配置上架</p>
             )}
           </section>
         </>
@@ -343,12 +475,12 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
 
 function statusBadge(s: string): React.ReactNode {
   const map: Record<string, { text: string; cls: string }> = {
-    draft:     { text: '草稿', cls: 'badge-gray' },
-    scheduled: { text: '待开始', cls: 'badge-blue' },
-    running:   { text: '竞拍中', cls: 'badge-red' },
+    draft:     { text: '待手动上架', cls: 'badge-gray' },
+    scheduled: { text: '定时待上架', cls: 'badge-blue' },
+    running:   { text: '已上架竞拍中', cls: 'badge-red' },
     sold:      { text: '已成交', cls: 'badge-green' },
     failed:    { text: '流拍', cls: 'badge-gray' },
-    cancelled: { text: '已取消', cls: 'badge-gray' },
+    cancelled: { text: '已下架/取消', cls: 'badge-gray' },
   }
   const info = map[s] || { text: s, cls: 'badge-gray' }
   return <span className={`status-badge ${info.cls}`}>{info.text}</span>

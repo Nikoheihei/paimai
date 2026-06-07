@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -241,6 +242,9 @@ func (s *SettleService) PayBuyerOrder(ctx context.Context, orderID uint64, buyer
 	}
 	if order.BuyerID != buyerID {
 		return nil, ErrUnauthorized
+	}
+	if order.Status != "paid" && (input.AddressID == nil || strings.TrimSpace(input.AddressSnapshot) == "") {
+		return nil, fmt.Errorf("%w: address is required before payment", ErrInvalidInput)
 	}
 	paid, err := s.PayOrder(ctx, orderID, input)
 	if err != nil {

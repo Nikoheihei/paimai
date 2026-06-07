@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -15,9 +16,9 @@ import (
 
 // RoomService 负责直播间管理（CRUD、开播、关播自动结算）。
 type RoomService struct {
-	adminStore     repository.AdminStore
-	settleService  *SettleService
-	now            func() time.Time
+	adminStore    repository.AdminStore
+	settleService *SettleService
+	now           func() time.Time
 }
 
 // NewRoomService 创建直播间管理服务。
@@ -54,6 +55,8 @@ type CloseRoomResult struct {
 
 // CreateRoom 创建直播间。
 func (s *RoomService) CreateRoom(ctx context.Context, sellerID uint64, input CreateRoomInput) (*RoomResult, error) {
+	input.Title = strings.TrimSpace(input.Title)
+	input.CoverURL = strings.TrimSpace(input.CoverURL)
 	if input.Title == "" {
 		return nil, fmt.Errorf("%w: title is required", ErrInvalidInput)
 	}
@@ -95,8 +98,8 @@ func (s *RoomService) GetRoom(ctx context.Context, id uint64) (*RoomResult, erro
 	return toRoomResult(room), nil
 }
 
-// UpdateRoom 更新直播间信息。
-func (s *RoomService) UpdateRoom(ctx context.Context, id uint64, input CreateRoomInput) (*RoomResult, error) {
+// UpdateRoom 更新当前商家的直播间信息。
+func (s *RoomService) UpdateRoom(ctx context.Context, id uint64, sellerID uint64, input CreateRoomInput) (*RoomResult, error) {
 	room, err := s.adminStore.GetRoom(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -104,16 +107,45 @@ func (s *RoomService) UpdateRoom(ctx context.Context, id uint64, input CreateRoo
 		}
 		return nil, err
 	}
-	if input.Title != "" {
-		room.Title = input.Title
+	if room.SellerID != sellerID {
+		return nil, ErrUnauthorized
 	}
-	if input.CoverURL != "" {
-		room.CoverURL = input.CoverURL
+	input.Title = strings.TrimSpace(input.Title)
+	if input.Title == "" {
+		return nil, fmt.Errorf("%w: title is required", ErrInvalidInput)
 	}
+	room.Title = input.Title
+	room.CoverURL = strings.TrimSpace(input.CoverURL)
 	if err := s.adminStore.UpdateRoom(ctx, room); err != nil {
 		return nil, err
 	}
 	return toRoomResult(room), nil
+}
+
+// DeleteRoom 删除当前商家的空直播间。已有上架计划或竞拍历史时拒绝，避免断开历史数据。
+func (s *RoomService) DeleteRoom(ctx context.Context, id uint64, sellerID uint64) error {
+	room, err := s.adminStore.GetRoom(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if room.SellerID != sellerID {
+		return ErrUnauthorized
+	}
+	if room.Status == "live" {
+		return fmt.Errorf("%w: cannot delete a live room", ErrInvalidTransition)
+	}
+
+	auctions, err := s.adminStore.ListAuctions(ctx, repository.AuctionFilter{RoomID: &id})
+	if err != nil {
+		return err
+	}
+	if len(auctions) > 0 {
+		return fmt.Errorf("%w: room has listing history, edit the room instead", ErrInvalidInput)
+	}
+	return s.adminStore.DeleteRoom(ctx, id)
 }
 
 // GoLive 将直播间从 offline 切换到 live。

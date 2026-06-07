@@ -6,10 +6,15 @@
 import { useEffect, useState } from 'react'
 import type { Order, Address } from '../api/client'
 import { payBuyerOrder, getBuyerOrder, listAddresses, listBuyerOrders } from '../api/client'
+import { formatPaymentCountdown, paymentDeadlineMs, remainingPaymentSeconds } from '../utils/paymentDeadline'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
 function productName(order: Order) { return order.productName || `商品 #${order.productId}` }
 function sellerName(order: Order) { return order.sellerNickname || `商家 #${order.sellerId}` }
+function paymentRemaining(order: Order, nowMs: number): number {
+  if (order.status !== 'pending_payment') return 0
+  return remainingPaymentSeconds(paymentDeadlineMs(order.createdAt), nowMs)
+}
 
 const statusLabel: Record<string, string> = {
   pending_payment: '待付款',
@@ -35,11 +40,17 @@ export default function OrderPage() {
   const [addresses, setAddresses] = useState<Address[]>([])
   const [selectedAddrId, setSelectedAddrId] = useState<number | null>(null)
   const [payLoading, setPayLoading] = useState(false)
+  const [nowMs, setNowMs] = useState(Date.now())
 
   const load = () => {
     listBuyerOrders().then(setOrders).catch(err => setMsg(err.message || '加载订单失败')).finally(() => setLoading(false))
   }
   useEffect(load, [])
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   // 监听订单刷新事件（竞拍成交后自动刷新）
   useEffect(() => {
@@ -59,13 +70,14 @@ export default function OrderPage() {
 
   const handlePay = async () => {
     if (!selected) return
+    if (paymentRemaining(selected, Date.now()) === 0) {
+      setMsg('支付已超时')
+      return
+    }
     try {
       const list = await listAddresses()
       setAddresses(list)
-      if (list.length > 0) {
-        const def = list.find(a => a.isDefault)
-        setSelectedAddrId(def ? def.id : list[0].id)
-      }
+      setSelectedAddrId(null)
       setShowAddress(true)
     } catch {
       setMsg('加载地址失败，请先到地址管理添加收货地址')
@@ -74,6 +86,10 @@ export default function OrderPage() {
 
   const confirmPay = async () => {
     if (!selected) return
+    if (paymentRemaining(selected, Date.now()) === 0) {
+      setMsg('支付已超时')
+      return
+    }
     if (addresses.length === 0) {
       setMsg('请先添加收货地址')
       return
@@ -103,6 +119,8 @@ export default function OrderPage() {
   }
 
   if (loading) return <div className="panel pending">加载中…</div>
+
+  const selectedRemaining = selected ? paymentRemaining(selected, nowMs) : 0
 
   return (
     <div className="order-page">
@@ -134,14 +152,27 @@ export default function OrderPage() {
             <div className="info-row"><span>金额</span><span className="price">¥{formatCents(selected.finalPriceCents)}</span></div>
             <div className="info-row"><span>状态</span><span className={statusClass[selected.status]}>{statusLabel[selected.status]}</span></div>
             <div className="info-row"><span>创建时间</span><span>{new Date(selected.createdAt).toLocaleString('zh-CN')}</span></div>
-            {selected.paidAt && <div className="info-row"><span>支付时间</span><span>{new Date(selected.paidAt).toLocaleString('zh-CN')}</span></div>}
-            {selected.addressSnapshot && (
-              <div className="info-row"><span>收货地址</span><span style={{ textAlign: 'right', maxWidth: '60%' }}>{selected.addressSnapshot}</span></div>
+            {selected.status === 'pending_payment' && (
+              <div className="info-row">
+                <span>支付倒计时</span>
+                <span className={selectedRemaining === 0 ? 'status-closed' : 'status-pending'}>
+                  {selectedRemaining === 0 ? '支付超时' : formatPaymentCountdown(selectedRemaining)}
+                </span>
+              </div>
             )}
+            {selected.paidAt && <div className="info-row"><span>支付时间</span><span>{new Date(selected.paidAt).toLocaleString('zh-CN')}</span></div>}
+            <div className="info-row">
+              <span>收货地址</span>
+              <span style={{ textAlign: 'right', maxWidth: '60%' }}>
+                {selected.addressSnapshot || (selected.status === 'pending_payment' ? '待支付时选择' : '未记录')}
+              </span>
+            </div>
           </div>
 
           {selected.status === 'pending_payment' && !showAddress && (
-            <button className="bid-btn" style={{ width: '100%', marginTop: 16 }} onClick={handlePay}>去支付</button>
+            <button className="bid-btn" style={{ width: '100%', marginTop: 16 }} disabled={selectedRemaining === 0} onClick={handlePay}>
+              {selectedRemaining === 0 ? '支付超时' : '去支付'}
+            </button>
           )}
 
           {/* 地址选择 */}
@@ -185,7 +216,7 @@ export default function OrderPage() {
               )}
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <button className="admin-btn" style={{ flex: 1 }} onClick={() => setShowAddress(false)}>取消</button>
-                <button className="bid-btn" style={{ flex: 1 }} disabled={payLoading || addresses.length === 0} onClick={confirmPay}>
+                <button className="bid-btn" style={{ flex: 1 }} disabled={payLoading || addresses.length === 0 || !selectedAddrId || selectedRemaining === 0} onClick={confirmPay}>
                   {payLoading ? '支付中…' : '确认支付'}
                 </button>
               </div>
@@ -226,6 +257,14 @@ export default function OrderPage() {
                       <span>成交价</span>
                       <span className="price">¥{formatCents(o.finalPriceCents)}</span>
                     </div>
+                    {o.status === 'pending_payment' && (
+                      <div className="order-card-price-row">
+                        <span>支付倒计时</span>
+                        <span className={paymentRemaining(o, nowMs) === 0 ? 'status-closed' : 'status-pending'}>
+                          {paymentRemaining(o, nowMs) === 0 ? '支付超时' : formatPaymentCountdown(paymentRemaining(o, nowMs))}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="order-card-row meta">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listRooms, createRoom, goLive, closeRoom, type LiveRoom } from '../api/client'
+import { listRooms, createRoom, updateRoom, deleteRoom, goLive, closeRoom, type LiveRoom } from '../api/client'
 import ImageUploader from '../components/ImageUploader'
 
 export default function RoomListPage() {
@@ -10,6 +10,9 @@ export default function RoomListPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [title, setTitle] = useState('')
   const [coverUrl, setCoverUrl] = useState('')
+  const [editingRoom, setEditingRoom] = useState<LiveRoom | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editCoverUrl, setEditCoverUrl] = useState('')
   const [loading, setLoading] = useState(false)
 
   const load = () => {
@@ -45,6 +48,45 @@ export default function RoomListPage() {
     finally { setLoading(false) }
   }
 
+  const startEdit = (room: LiveRoom) => {
+    setEditingRoom(room)
+    setEditTitle(room.title)
+    setEditCoverUrl(room.coverUrl || '')
+    setShowCreate(false)
+  }
+
+  const cancelEdit = () => {
+    setEditingRoom(null)
+    setEditTitle('')
+    setEditCoverUrl('')
+  }
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingRoom || !editTitle.trim()) return
+    setLoading(true)
+    try {
+      await updateRoom(editingRoom.id, editTitle.trim(), editCoverUrl || undefined)
+      cancelEdit()
+      load()
+    } catch (err: any) { alert(err.message) }
+    finally { setLoading(false) }
+  }
+
+  const handleDelete = async (room: LiveRoom) => {
+    if (room.status === 'live') {
+      alert('直播中的房间请先关播后再删除')
+      return
+    }
+    if (!confirm(`确定删除直播间「${room.title}」？已有上架计划或竞拍历史的房间不会被删除，请用编辑功能修改名称或封面。`)) return
+    setLoading(true)
+    try {
+      await deleteRoom(room.id)
+      load()
+    } catch (err: any) { alert(err.message) }
+    finally { setLoading(false) }
+  }
+
   const handleGoLive = async (id: number) => {
     try { await goLive(id); load() } catch (err: any) { alert(err.message) }
   }
@@ -60,7 +102,7 @@ export default function RoomListPage() {
     <div className="admin-page">
       <div className="page-header">
         <h1>我的直播间</h1>
-        <button className="admin-btn primary" onClick={() => setShowCreate(!showCreate)}>
+        <button className="admin-btn primary" onClick={() => { cancelEdit(); setShowCreate(!showCreate) }}>
           {showCreate ? '取消' : '+ 创建直播间'}
         </button>
       </div>
@@ -102,6 +144,26 @@ export default function RoomListPage() {
         </form>
       )}
 
+      {editingRoom && (
+        <form className="create-form-card" onSubmit={handleUpdate}>
+          <h3>编辑直播间</h3>
+          <div className="form-grid-2col">
+            <div className="field">
+              <label>直播间标题 *</label>
+              <input type="text" placeholder="输入直播间标题" value={editTitle} onChange={e => setEditTitle(e.target.value)} required />
+            </div>
+            <div className="field">
+              <label>封面图</label>
+              <ImageUploader value={editCoverUrl} onChange={setEditCoverUrl} placeholder="点击或拖拽更换直播间封面" />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <button type="button" className="admin-btn" onClick={cancelEdit}>取消</button>
+            <button type="submit" className="admin-btn primary" disabled={loading}>保存修改</button>
+          </div>
+        </form>
+      )}
+
       {/* 直播间表格 */}
       {filtered.length > 0 ? (
         <table className="data-table">
@@ -133,8 +195,10 @@ export default function RoomListPage() {
                 <td>
                   <div className="action-cell">
                     <button className="admin-btn small" onClick={() => window.location.hash = `#/rooms/${r.id}`}>管理</button>
+                    <button className="admin-btn small" onClick={() => startEdit(r)}>编辑</button>
                     {r.status === 'offline' && <button className="admin-btn small primary" onClick={() => handleGoLive(r.id)}>开播</button>}
                     {r.status === 'live' && <button className="admin-btn small danger" onClick={() => handleClose(r.id)}>关播</button>}
+                    {r.status !== 'live' && <button className="admin-btn small danger" onClick={() => handleDelete(r)}>删除</button>}
                   </div>
                 </td>
               </tr>

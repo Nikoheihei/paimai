@@ -6,10 +6,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { getToken, getAuction, getRanking, placeBid, payBuyerOrder, listBuyerOrders, type Auction, type RankingItem, type BidResult } from '../api/client'
+import { getToken, getAuction, getRanking, placeBid, payBuyerOrder, listBuyerOrders, listAddresses, type Auction, type RankingItem, type BidResult, type Address, type Order } from '../api/client'
 import type { WsMessage } from '../hooks/useWebSocket'
 import Countdown from '../components/Countdown'
 import Toast from '../components/Toast'
+import { formatPaymentCountdown, paymentDeadlineMs, PAYMENT_WINDOW_SECONDS, remainingPaymentSeconds } from '../utils/paymentDeadline'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
 
@@ -35,12 +36,16 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   const [customAmount, setCustomAmount] = useState('')
   const [lastMessage, setLastMessage] = useState<WsMessage | null>(null)
   const [showPayModal, setShowPayModal] = useState(false)
-  const [payCountdown, setPayCountdown] = useState(300)
+  const [payCountdown, setPayCountdown] = useState(PAYMENT_WINDOW_SECONDS)
+  const [payOrder, setPayOrder] = useState<Order | null>(null)
   const [payLoading, setPayLoading] = useState(false)
   const [paidAuctionIds, setPaidAuctionIds] = useState<number[]>([])
+  const [addresses, setAddresses] = useState<Address[]>([])
+  const [selectedAddrId, setSelectedAddrId] = useState<number | null>(null)
   const idemCounter = useRef(0)
   const payTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const payTriggeredRef = useRef<number | null>(null)
+  const payDeadlineRef = useRef(0)
 
   const { connected: _wsConnected } = useWebSocket(auction?.roomId || 0, userId, {
     onMessage: (msg) => setLastMessage(msg),
@@ -67,26 +72,37 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
       clearInterval(payTimerRef.current)
       payTimerRef.current = null
     }
+    payDeadlineRef.current = 0
+    setPayCountdown(0)
   }, [])
 
-  const startPayCountdown = useCallback(() => {
+  const startPayCountdown = useCallback((deadlineMs: number) => {
     stopPayCountdown()
-    setPayCountdown(300)
-    payTimerRef.current = setInterval(() => {
-      setPayCountdown(prev => {
-        if (prev <= 1) {
-          stopPayCountdown()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
+    payDeadlineRef.current = deadlineMs
+
+    const tick = () => {
+      const remaining = remainingPaymentSeconds(payDeadlineRef.current)
+      setPayCountdown(remaining)
+      if (remaining <= 0) {
+        if (payTimerRef.current) clearInterval(payTimerRef.current)
+        payTimerRef.current = null
+        payDeadlineRef.current = 0
+      }
+    }
+    tick()
+    if (remainingPaymentSeconds(deadlineMs) > 0) {
+      payTimerRef.current = setInterval(tick, 1000)
+    }
   }, [stopPayCountdown])
+
+  const loadPaymentOrder = useCallback(async (targetAuctionId: number): Promise<Order | null> => {
+    const orders = await listBuyerOrders(targetAuctionId)
+    return orders.find(order => order.auctionId === targetAuctionId) || orders[0] || null
+  }, [])
 
   const closePayModal = useCallback(() => {
     setShowPayModal(false)
-    stopPayCountdown()
-  }, [stopPayCountdown])
+  }, [])
 
   const soldWinnerAuctionId = auction?.status === 'sold' && auction.winnerUserId === userId
     ? auction.id
@@ -95,26 +111,108 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   // 成交后自动弹出支付倒计时（每个成交竞拍只触发一次）
   useEffect(() => {
     if (!soldWinnerAuctionId || paidAuctionIds.includes(soldWinnerAuctionId)) return
-    if (payTriggeredRef.current === soldWinnerAuctionId) return
-    payTriggeredRef.current = soldWinnerAuctionId
-    setShowPayModal(true)
-    startPayCountdown()
-  }, [soldWinnerAuctionId, paidAuctionIds, startPayCountdown])
+    if (payTriggeredRef.current === soldWinnerAuctionId && payOrder?.auctionId === soldWinnerAuctionId) return
+
+    let cancelled = false
+    loadPaymentOrder(soldWinnerAuctionId)
+      .then(order => {
+        if (cancelled) return
+        if (!order) {
+          Toast.error('订单未生成，请稍后重试')
+          return
+        }
+        if (order.status === 'paid') {
+          setPayOrder(order)
+          payTriggeredRef.current = soldWinnerAuctionId
+          setPaidAuctionIds(prev => prev.includes(soldWinnerAuctionId) ? prev : [...prev, soldWinnerAuctionId])
+          stopPayCountdown()
+          return
+        }
+        setPayOrder(order)
+        payTriggeredRef.current = soldWinnerAuctionId
+        startPayCountdown(paymentDeadlineMs(order.createdAt))
+        setShowPayModal(true)
+      })
+      .catch((err: any) => {
+        if (!cancelled) Toast.error(err.message || '加载订单失败')
+      })
+
+    return () => { cancelled = true }
+  }, [loadPaymentOrder, paidAuctionIds, payOrder?.auctionId, soldWinnerAuctionId, startPayCountdown, stopPayCountdown])
 
   useEffect(() => () => stopPayCountdown(), [stopPayCountdown])
 
+  useEffect(() => {
+    if (!showPayModal) return
+    listAddresses()
+      .then(list => {
+        setAddresses(list)
+        if (selectedAddrId && !list.some(addr => addr.id === selectedAddrId)) {
+          setSelectedAddrId(null)
+        }
+      })
+      .catch(() => {
+        setAddresses([])
+        setSelectedAddrId(null)
+      })
+  }, [showPayModal, selectedAddrId])
+
+  const selectedAddress = useMemo(
+    () => addresses.find(addr => addr.id === selectedAddrId) || null,
+    [addresses, selectedAddrId],
+  )
+
+  const openPayModal = useCallback(async () => {
+    if (!auction || auction.status !== 'sold' || auction.winnerUserId !== userId || paidAuctionIds.includes(auction.id)) return
+    try {
+      const order = payOrder?.auctionId === auction.id ? payOrder : await loadPaymentOrder(auction.id)
+      if (!order) {
+        Toast.error('订单未生成，请稍后重试')
+        return
+      }
+      if (order.status === 'paid') {
+        setPayOrder(order)
+        setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
+        Toast.success('支付成功！')
+        return
+      }
+      setPayOrder(order)
+      startPayCountdown(paymentDeadlineMs(order.createdAt))
+      setShowPayModal(true)
+    } catch (err: any) {
+      Toast.error(err.message || '加载订单失败')
+    }
+  }, [auction, loadPaymentOrder, paidAuctionIds, payOrder, startPayCountdown, userId])
+
   const handlePay = async () => {
     if (!auction) return
+    if (!selectedAddress) {
+      Toast.error('请先选择收货地址')
+      return
+    }
+    if (payCountdown === 0) {
+      Toast.error('支付已超时')
+      return
+    }
     setPayLoading(true)
     try {
-      const orders = await listBuyerOrders(auction.id)
-      if (orders.length === 0) {
+      const order = payOrder?.auctionId === auction.id ? payOrder : await loadPaymentOrder(auction.id)
+      if (!order) {
         Toast.error('订单未生成，请稍后重试')
         setPayLoading(false)
         return
       }
-      const order = orders[0]
-      await payBuyerOrder(order.id)
+      if (order.status === 'paid') {
+        setPayOrder(order)
+        setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
+        Toast.success('支付成功！')
+        setShowPayModal(false)
+        stopPayCountdown()
+        return
+      }
+      const snapshot = `${selectedAddress.name} ${selectedAddress.phone} ${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail}`
+      const paidOrder = await payBuyerOrder(order.id, selectedAddress.id, snapshot)
+      setPayOrder(paidOrder)
       setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
       Toast.success('支付成功！')
       setShowPayModal(false)
@@ -159,6 +257,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
 
   const isRunning = auction.status === 'running'
   const price = auction.currentPriceCents > 0 ? auction.currentPriceCents : auction.startPriceCents
+  const isCurrentPaid = paidAuctionIds.includes(auction.id) || payOrder?.status === 'paid'
 
   return (
     <div className="auction-detail-page" style={{ transform: 'scale(0.667)', transformOrigin: 'top center', height: '150%', overflow: 'hidden' }}>
@@ -227,7 +326,16 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
 
       {!isRunning && (
         <div className="detail-ended-notice">
-          {auction.status === 'sold' ? '竞拍已成交' : auction.status === 'failed' ? '竞拍流拍' : '竞拍未开始'}
+          <div>{auction.status === 'sold' ? '竞拍已成交' : auction.status === 'failed' ? '竞拍流拍' : '竞拍未开始'}</div>
+          {auction.status === 'sold' && auction.winnerUserId === userId && (
+            <button
+              className="bid-btn-primary detail-pay-btn"
+              disabled={isCurrentPaid}
+              onClick={openPayModal}
+            >
+              {isCurrentPaid ? '支付成功' : '立即支付'}
+            </button>
+          )}
         </div>
       )}
 
@@ -242,7 +350,47 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
                 <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--primary)' }}>¥{formatCents(auction.currentPriceCents)}</div>
               </div>
               <div style={{ textAlign: 'center', fontSize: 14, color: '#ff4757', fontWeight: 700 }}>
-                ⏰ 支付倒计时: {Math.floor(payCountdown / 60)}:{String(payCountdown % 60).padStart(2, '0')}
+                ⏰ 支付倒计时: {formatPaymentCountdown(payCountdown)}
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>选择收货地址</div>
+                {addresses.length === 0 ? (
+                  <div style={{
+                    padding: 10,
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,152,0,.2)',
+                    background: 'rgba(255,152,0,.08)',
+                    color: '#ffa726',
+                    fontSize: 12,
+                    textAlign: 'center',
+                  }}>
+                    暂无地址，请先到地址页添加
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 148, overflowY: 'auto' }}>
+                    {addresses.map(addr => (
+                      <button
+                        key={addr.id}
+                        type="button"
+                        onClick={() => setSelectedAddrId(addr.id)}
+                        style={{
+                          textAlign: 'left',
+                          padding: 10,
+                          borderRadius: 8,
+                          border: selectedAddrId === addr.id ? '1px solid var(--green)' : '1px solid var(--glass-border)',
+                          background: selectedAddrId === addr.id ? 'rgba(37,199,120,.12)' : 'rgba(255,255,255,.04)',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{addr.name} {addr.phone}</div>
+                        <div style={{ marginTop: 3, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          {addr.province}{addr.city}{addr.district}{addr.detail}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               {payCountdown === 0 && (
                 <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>
@@ -254,7 +402,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
               <button className="modal-btn modal-cancel" onClick={closePayModal}>稍后再付</button>
               <button
                 className="modal-btn modal-confirm"
-                disabled={payLoading || payCountdown === 0}
+                disabled={payLoading || payCountdown === 0 || !selectedAddress}
                 onClick={handlePay}
               >
                 {payLoading ? '支付中...' : '立即支付'}

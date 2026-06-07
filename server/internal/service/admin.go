@@ -84,14 +84,16 @@ type AuctionInput struct {
 // 指针字段用于区分“调用方没有传这个字段”和“调用方显式传了 0”。
 // 例如 CapPriceCents 传 0 表示清除封顶价，而 nil 表示不修改封顶价。
 type AuctionPatchInput struct {
-	Mode               *string `json:"mode"`
-	StartPriceCents    *int64  `json:"startPriceCents"`
-	BidIncrementCents  *int64  `json:"bidIncrementCents"`
-	CapPriceCents      *int64  `json:"capPriceCents"`
-	ReservePriceCents  *int64  `json:"reservePriceCents"`
-	ClearReservePrice  bool    `json:"clearReservePrice"`
-	ExtendThresholdSec *int    `json:"extendThresholdSec"`
-	ExtendDurationSec  *int    `json:"extendDurationSec"`
+	Mode               *string    `json:"mode"`
+	StartPriceCents    *int64     `json:"startPriceCents"`
+	BidIncrementCents  *int64     `json:"bidIncrementCents"`
+	CapPriceCents      *int64     `json:"capPriceCents"`
+	ReservePriceCents  *int64     `json:"reservePriceCents"`
+	ClearReservePrice  bool       `json:"clearReservePrice"`
+	ExtendThresholdSec *int       `json:"extendThresholdSec"`
+	ExtendDurationSec  *int       `json:"extendDurationSec"`
+	StartAt            *time.Time `json:"startAt"`
+	EndAt              *time.Time `json:"endAt"`
 }
 
 // StartAuctionInput 是开始竞拍时的可选参数。
@@ -237,6 +239,15 @@ func (s *AdminService) UpdateAuction(ctx context.Context, id uint64, input Aucti
 	if input.ExtendDurationSec != nil {
 		auction.ExtendDurationSec = *input.ExtendDurationSec
 	}
+	if input.StartAt != nil && !input.StartAt.IsZero() {
+		auction.StartAt = *input.StartAt
+	}
+	if input.EndAt != nil && !input.EndAt.IsZero() {
+		if !input.EndAt.After(auction.StartAt) {
+			return nil, fmt.Errorf("%w: endAt must be after startAt", ErrInvalidInput)
+		}
+		auction.EndAt = *input.EndAt
+	}
 
 	if err := validateAuctionRules(auction.Mode, auction.StartPriceCents, auction.BidIncrementCents, auction.CapPriceCents, auction.ReservePriceCents, auction.ExtendThresholdSec, auction.ExtendDurationSec); err != nil {
 		return nil, err
@@ -292,6 +303,34 @@ func (s *AdminService) CancelAuction(ctx context.Context, id uint64, input Cance
 // ListAuctions 查询后台竞拍列表，可按直播间和状态过滤。
 func (s *AdminService) ListAuctions(ctx context.Context, filter repository.AuctionFilter) ([]model.Auction, error) {
 	return s.store.ListAuctions(ctx, filter)
+}
+
+// StartDueScheduledAuctions 将已到预约时间的上架计划自动启动为 running。
+func (s *AdminService) StartDueScheduledAuctions(ctx context.Context) (int, error) {
+	auctions, err := s.store.ListAuctions(ctx, repository.AuctionFilter{Status: string(statemachine.StateScheduled)})
+	if err != nil {
+		return 0, err
+	}
+
+	now := s.now()
+	started := 0
+	for _, auction := range auctions {
+		if auction.StartAt.After(now) {
+			continue
+		}
+		durationSec := int(auction.EndAt.Sub(auction.StartAt).Seconds())
+		if durationSec <= 0 {
+			durationSec = 300
+		}
+		if _, err := s.StartAuction(ctx, auction.ID, StartAuctionInput{DurationSec: durationSec}); err != nil {
+			if errors.Is(err, ErrInvalidTransition) {
+				continue
+			}
+			return started, err
+		}
+		started++
+	}
+	return started, nil
 }
 
 // ListAuctionBids 查询指定竞拍的出价历史（按金额降序）。

@@ -8,7 +8,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { listAddresses, type Address as ApiAddress } from '../api/client'
+import Toast from './Toast'
+import { listAddresses, createAddress, type Address as ApiAddress } from '../api/client'
 
 export interface AddressItem {
   id: number
@@ -43,6 +44,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [addresses, setAddresses] = useState<AddressItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
 
   const [name, setName] = useState('')
@@ -58,8 +60,8 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
     try {
       const list = await listAddresses()
       setAddresses(list.map(toLocal))
-    } catch {
-      // 静默处理
+    } catch (e: any) {
+      Toast.error(e.message || '地址加载失败')
     } finally {
       setLoading(false)
     }
@@ -69,13 +71,44 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
     load()
   }, [load])
 
-  const handleSave = async () => {
-    if (!name.trim() || !phone.trim() || !detail.trim()) return
-    const { createAddress } = await import('../api/client')
-    await createAddress({ name, phone, province, city, district, detail, isDefault })
-    await load()
-    setShowForm(false)
+  useEffect(() => {
+    if (expanded) load()
+  }, [expanded, load])
+
+  const resetForm = () => {
     setName(''); setPhone(''); setProvince(''); setCity(''); setDistrict(''); setDetail(''); setIsDefault(false)
+  }
+
+  const handleSave = async () => {
+    if (!name.trim() || !phone.trim() || !detail.trim()) {
+      Toast.error('请填写收货人、手机号和详细地址')
+      return
+    }
+    setSaving(true)
+    try {
+      const created = toLocal(await createAddress({
+        name: name.trim(),
+        phone: phone.trim(),
+        province: province.trim(),
+        city: city.trim(),
+        district: district.trim(),
+        detail: detail.trim(),
+        isDefault,
+      }))
+      setAddresses(prev => {
+        const next = isDefault ? prev.map(a => ({ ...a, isDefault: false })) : prev
+        return [created, ...next.filter(a => a.id !== created.id)]
+      })
+      onSelect(created)
+      setShowForm(false)
+      resetForm()
+      Toast.success('地址已添加')
+      await load()
+    } catch (e: any) {
+      Toast.error(e.message || '地址保存失败')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -103,7 +136,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
           boxShadow: '-2px 0 10px rgba(0,0,0,.3)',
           border: '1px solid var(--glass-border)',
           borderRight: 'none',
-          zIndex: 145,
+          zIndex: 410,
           whiteSpace: 'nowrap',
           userSelect: 'none',
         }}
@@ -120,7 +153,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
             style={{
               position: 'fixed',
               inset: 0,
-              zIndex: 146,
+              zIndex: 420,
               background: 'rgba(0,0,0,.3)',
             }}
           />
@@ -137,7 +170,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
               WebkitBackdropFilter: 'blur(24px)',
               borderRadius: 'var(--radius-lg) 0 0 var(--radius-lg)',
               boxShadow: '-4px 0 24px rgba(0,0,0,.5)',
-              zIndex: 147,
+              zIndex: 430,
               display: 'flex',
               flexDirection: 'column',
               border: '1px solid var(--glass-border)',
@@ -156,7 +189,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
             }}>
               <span style={{ fontSize: 15, fontWeight: 700 }}>收货地址</span>
               <button
-                onClick={() => setShowForm(!showForm)}
+                onClick={() => { setShowForm(!showForm); if (showForm) resetForm() }}
                 style={{
                   background: 'none',
                   border: '1px solid var(--glass-border)',
@@ -173,7 +206,7 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
 
             {/* 新增表单 */}
             {showForm && (
-              <div style={{
+              <form onSubmit={(e) => { e.preventDefault(); handleSave() }} style={{
                 padding: '12px 16px',
                 borderBottom: '1px solid var(--glass-border)',
                 flexShrink: 0,
@@ -192,13 +225,14 @@ export default function AddressFloatPanel({ selectedId, onSelect }: Props) {
                   <input type="checkbox" checked={isDefault} onChange={e => setIsDefault(e.target.checked)} />
                   设为默认地址
                 </label>
-                <button onClick={handleSave} style={{
+                <button type="submit" disabled={saving} style={{
                   width: '100%', padding: '8px 0', background: 'var(--primary-grad)',
                   border: 'none', borderRadius: 8, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                  opacity: saving ? .65 : 1,
                 }}>
-                  保存
+                  {saving ? '保存中...' : '保存'}
                 </button>
-              </div>
+              </form>
             )}
 
             {/* 地址列表 */}

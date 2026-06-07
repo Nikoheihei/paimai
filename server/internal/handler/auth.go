@@ -4,9 +4,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"net/http"
-	"sync"
 	"paimai/internal/service"
 	"paimai/pkg/response"
+	"sync"
 )
 
 // AuthHandler 负责用户认证的 HTTP 协议适配。
@@ -39,15 +39,15 @@ func RegisterAddressRoutes(r gin.IRouter) {
 }
 
 type Address struct {
-	ID       uint64 `json:"id"`
-	UserID   uint64 `json:"userId"`
-	Name     string `json:"name"`
-	Phone    string `json:"phone"`
-	Province string `json:"province"`
-	City     string `json:"city"`
-	District string `json:"district"`
-	Detail   string `json:"detail"`
-	IsDefault bool  `json:"isDefault"`
+	ID        uint64 `json:"id"`
+	UserID    uint64 `json:"userId"`
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	Province  string `json:"province"`
+	City      string `json:"city"`
+	District  string `json:"district"`
+	Detail    string `json:"detail"`
+	IsDefault bool   `json:"isDefault"`
 }
 
 var addressStore sync.Map // userID -> []Address
@@ -60,7 +60,7 @@ func listAddresses(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
 		return
 	}
-	var result []Address
+	result := make([]Address, 0)
 	if raw, ok := addressStore.Load(userID); ok {
 		result = raw.([]Address)
 	}

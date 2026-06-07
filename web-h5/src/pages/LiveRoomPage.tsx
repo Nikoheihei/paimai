@@ -54,6 +54,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
   const [allAuctions, setAllAuctions] = useState<Auction[]>([] as Auction[])
   // 当前选中的竞拍 ID（由商品浮层切换控制）
   const [activeAuctionId, setActiveAuctionId] = useState<number | null>(null)
+  const [autoOpenAuction, setAutoOpenAuction] = useState(true)
 
   // 拍卖结束弹窗状态
   const [endedAuction, setEndedAuction] = useState<Auction | null>(null)
@@ -100,9 +101,9 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
     getRoomAuctions(roomId).then((list: ApiAuction[]) => {
       setAllAuctions(list as unknown as Auction[])
       const running = list.find(a => a.status === 'running')
-      if (running && !activeAuctionId) setActiveAuctionId(running.id)
+      if (running && !activeAuctionId && autoOpenAuction) setActiveAuctionId(running.id)
     })
-  }, [roomId, activeAuctionId])
+  }, [roomId, activeAuctionId, autoOpenAuction])
 
   useEffect(() => {
     getRoom(roomId).then(r => {
@@ -141,6 +142,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
   // 关闭竞拍面板回到直播画面
   const handleCloseAuction = useCallback(()=>{
+    setAutoOpenAuction(false)
     setActiveAuctionId(null)
   },[])
 
@@ -177,6 +179,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
   // 商品浮层选择回调
   const handleSelectAuction = useCallback((auctionId:number)=>{
+    setAutoOpenAuction(false)
     setActiveAuctionId(auctionId); setLastMessage(null)
   },[])
 
@@ -194,10 +197,15 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
 
   // 结果弹窗关闭
   const handleResultClose = useCallback(()=>{
+    const shouldKeepWinningAuction = endedAuction?.winnerUserId === userId
     setShowResultModal(false); setEndedAuction(null)
+    if (shouldKeepWinningAuction) {
+      if (endedAuction?.id) setActiveAuctionId(endedAuction.id)
+      return
+    }
     const next=allAuctions.find(a=>a.status==='running')
     if(next&&next.id!==activeAuctionId) setActiveAuctionId(next.id)
-  },[allAuctions,activeAuctionId])
+  },[allAuctions,activeAuctionId,endedAuction,userId])
 
   // 发送弹幕
   const handleSendBarrage = useCallback((text: string) => {

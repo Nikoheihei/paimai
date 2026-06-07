@@ -116,6 +116,7 @@ func (s *mockAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoo
 	return nil, nil
 }
 func (s *mockAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error { return nil }
+func (s *mockAdminStore) DeleteRoom(ctx context.Context, id uint64) error            { return nil }
 func (s *mockAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
 	return nil, nil
 }

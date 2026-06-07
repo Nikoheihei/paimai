@@ -1,0 +1,27 @@
+{
+  "mode": "multi",
+  "config": {
+    "concurrency": 500,
+    "auctions": 100,
+    "durationSec": 15
+  },
+  "summary": {
+    "totalRequests": 97172,
+    "bidSuccess": 21430,
+    "bidRejected": 11811,
+    "acceptRate": "64.5%",
+    "errorCount": 15345,
+    "errorRate": "15.79%",
+    "avgQps": 6406,
+    "peakQps": 7313,
+    "minQps": 4556,
+    "durationMs": 15168
+  },
+  "latency": {
+    "avg": 57,
+    "p50": 50,
+    "p95": 114,
+    "p99": 177,
+    "max": 383
+  }
+}

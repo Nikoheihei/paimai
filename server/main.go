@@ -118,6 +118,9 @@ func main() {
 		handler.RegisterAddressRoutes(r.Group("/api"))
 
 		// 启动时结算已过期的 running 竞拍
+		if count, err := adminService.StartDueScheduledAuctions(context.Background()); err == nil && count > 0 {
+			log.Printf("启动时自动上架了 %d 个定时竞拍", count)
+		}
 		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 			log.Printf("启动时结算了 %d 个过期竞拍", count)
 		}
@@ -127,6 +130,9 @@ func main() {
 			ticker := time.NewTicker(3 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
+				if count, err := adminService.StartDueScheduledAuctions(context.Background()); err == nil && count > 0 {
+					log.Printf("定时自动上架了 %d 个竞拍", count)
+				}
 				if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 					log.Printf("定时结算了 %d 个过期竞拍", count)
 				}

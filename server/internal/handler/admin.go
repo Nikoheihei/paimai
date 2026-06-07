@@ -27,9 +27,9 @@ func RegisterAdminRoutes(r gin.IRouter, adminService *service.AdminService) {
 	{
 		admin.POST("/products", h.createProduct)
 		admin.GET("/products", h.listProducts)
-	admin.GET("/products/:id", h.getProduct)
-	admin.PATCH("/products/:id", h.updateProduct)
-	admin.DELETE("/products/:id", h.deleteProduct)
+		admin.GET("/products/:id", h.getProduct)
+		admin.PATCH("/products/:id", h.updateProduct)
+		admin.DELETE("/products/:id", h.deleteProduct)
 
 		admin.POST("/auctions", h.createAuction)
 		admin.GET("/auctions", h.listAuctions)
@@ -54,7 +54,8 @@ func (h *AdminHandler) createProduct(c *gin.Context) {
 
 // listProducts 解析商品列表筛选参数，并返回后台商品列表。
 func (h *AdminHandler) listProducts(c *gin.Context) {
-	products, err := h.service.ListProducts(c.Request.Context(), nil)
+	sellerID := mustGetUserID(c)
+	products, err := h.service.ListProducts(c.Request.Context(), &sellerID)
 	writeResult(c, products, err)
 }
 

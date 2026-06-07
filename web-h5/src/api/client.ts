@@ -265,7 +265,8 @@ export type Address = {
 }
 
 export async function listAddresses(): Promise<Address[]> {
-  return apiFetch('/addresses')
+  const list = await apiFetch('/addresses')
+  return Array.isArray(list) ? list : []
 }
 export async function createAddress(input: Omit<Address, 'id' | 'userId'>): Promise<Address> {
   return apiFetch('/addresses', { method: 'POST', body: JSON.stringify(input) })

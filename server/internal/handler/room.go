@@ -21,6 +21,7 @@ func RegisterRoomRoutes(r gin.IRouter, roomService *service.RoomService, hub *we
 		r.GET("/rooms", h.listRooms)
 		r.GET("/rooms/:id", h.getRoom)
 		r.PATCH("/rooms/:id", h.updateRoom)
+		r.DELETE("/rooms/:id", h.deleteRoom)
 		r.POST("/rooms/:id/live", h.goLive)
 		r.POST("/rooms/:id/close", h.closeRoom)
 		r.GET("/rooms/:id/stats", h.getRoomStats)
@@ -59,8 +60,17 @@ func (h *RoomHandler) updateRoom(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	room, err := h.roomService.UpdateRoom(c.Request.Context(), id, input)
+	room, err := h.roomService.UpdateRoom(c.Request.Context(), id, mustGetUserID(c), input)
 	writeResult(c, room, err)
+}
+
+func (h *RoomHandler) deleteRoom(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	err := h.roomService.DeleteRoom(c.Request.Context(), id, mustGetUserID(c))
+	writeResult(c, nil, err)
 }
 
 func (h *RoomHandler) goLive(c *gin.Context) {

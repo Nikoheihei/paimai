@@ -87,6 +87,9 @@ export async function getRoom(id: number): Promise<LiveRoom> {
 export async function updateRoom(id: number, title: string, coverUrl?: string): Promise<LiveRoom> {
   return apiFetch(`/admin/rooms/${id}`, { method: 'PATCH', body: JSON.stringify({ title, coverUrl: coverUrl || '' }) })
 }
+export async function deleteRoom(id: number): Promise<void> {
+  return apiFetch(`/admin/rooms/${id}`, { method: 'DELETE' })
+}
 export async function goLive(id: number): Promise<LiveRoom> {
   return apiFetch(`/admin/rooms/${id}/live`, { method: 'POST' })
 }
@@ -151,6 +154,20 @@ export async function listAuctions(roomId?: number, status?: string): Promise<Au
   if (status) params.set('status', status)
   const qs = params.toString()
   return apiFetch(`/admin/auctions${qs ? '?' + qs : ''}`)
+}
+export async function updateAuction(id: number, input: Partial<{
+  mode: string
+  startPriceCents: number
+  bidIncrementCents: number
+  capPriceCents: number
+  reservePriceCents: number | null
+  clearReservePrice: boolean
+  extendThresholdSec: number
+  extendDurationSec: number
+  startAt: string
+  endAt: string
+}>): Promise<Auction> {
+  return apiFetch(`/admin/auctions/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 }
 export async function publishAuction(id: number): Promise<Auction> {
   return apiFetch(`/admin/auctions/${id}/publish`, { method: 'POST' })

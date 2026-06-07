@@ -1135,6 +1135,10 @@ html, body {
 .detail-ended-notice {
   text-align: center; padding: 40px 20px; font-size: 16px; color: var(--text-secondary);
 }
+.detail-pay-btn {
+  min-width: 160px;
+  margin-top: 16px;
+}
 
 /* ================================================================
    SECTION 15: 订单页 Tab + 地址选择

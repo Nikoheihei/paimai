@@ -32,6 +32,7 @@ type AdminStore interface {
 	CreateRoom(ctx context.Context, room *model.LiveRoom) error
 	GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error)
 	UpdateRoom(ctx context.Context, room *model.LiveRoom) error
+	DeleteRoom(ctx context.Context, id uint64) error
 	ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error)
 	GetUser(ctx context.Context, id uint64) (*model.User, error)
 
@@ -197,6 +198,9 @@ func (s *txGormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveR
 }
 func (s *txGormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error {
 	return s.db.WithContext(ctx).Save(room).Error
+}
+func (s *txGormAdminStore) DeleteRoom(ctx context.Context, id uint64) error {
+	return s.db.WithContext(ctx).Delete(&model.LiveRoom{}, id).Error
 }
 func (s *txGormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
 	var r []model.LiveRoom
@@ -390,6 +394,10 @@ func (s *GormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoo
 
 func (s *GormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error {
 	return s.db.WithContext(ctx).Save(room).Error
+}
+
+func (s *GormAdminStore) DeleteRoom(ctx context.Context, id uint64) error {
+	return s.db.WithContext(ctx).Delete(&model.LiveRoom{}, id).Error
 }
 
 func (s *GormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {

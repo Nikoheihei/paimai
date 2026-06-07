@@ -1,0 +1,43 @@
+{
+  "mode": "multi",
+  "label": "350拍卖 × 3人 = 1050并发",
+  "config": {
+    "concurrency": 1050,
+    "auctions": 350,
+    "durationSec": 10
+  },
+  "http": {
+    "total": 95900,
+    "2xx": 83625,
+    "2xx_rate": "87.2%",
+    "4xx": 12178,
+    "4xx_rate": "12.7%",
+    "5xx": 97,
+    "5xx_rate": "0.1%",
+    "timeout": 0,
+    "timeout_rate": "0.0%",
+    "system_error_rate": "0.1%",
+    "avgQps": 9493
+  },
+  "bid": {
+    "total": 12244,
+    "accepted": 66,
+    "accepted_per_sec": "6.5",
+    "rejected": 12178,
+    "business_accept_rate": "0.5%",
+    "system_error": 97,
+    "reject_reasons": {
+      "竞拍已经结束": 12166,
+      "出价被拒绝": 12
+    }
+  },
+  "latency": {
+    "all": {
+      "avg": 48,
+      "p50": 35,
+      "p95": 105,
+      "p99": 359,
+      "max": 452
+    }
+  }
+}

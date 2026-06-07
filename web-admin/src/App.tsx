@@ -3,7 +3,7 @@
  * #/login       登录/注册
  * #/            Dashboard 数据概览
  * #/rooms       直播间列表
- * #/rooms/:id   直播间详情（商品/竞拍管理）
+ * #/rooms/:id   直播间详情（商品库/上架计划）
  * #/products    独立商品管理
  * #/orders      订单列表
  */

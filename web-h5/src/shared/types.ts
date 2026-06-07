@@ -48,7 +48,7 @@ export interface Product {
 
 // === 竞拍 ===
 
-export type AuctionMode = 'sudden_death' | 'extension'
+export type AuctionMode = 'sudden_death' | 'extension' | 'reserve'
 export type AuctionStatus = 'draft' | 'scheduled' | 'running' | 'sold' | 'failed' | 'cancelled'
 
 export interface Auction {

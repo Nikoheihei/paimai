@@ -189,11 +189,24 @@ func (s *adminStoreStub) GetRoom(_ context.Context, id uint64) (*model.LiveRoom,
 }
 
 func (s *adminStoreStub) UpdateRoom(_ context.Context, room *model.LiveRoom) error {
+	cp := *room
+	s.rooms[room.ID] = &cp
+	return nil
+}
+
+func (s *adminStoreStub) DeleteRoom(_ context.Context, id uint64) error {
+	delete(s.rooms, id)
 	return nil
 }
 
 func (s *adminStoreStub) ListRoomsBySeller(_ context.Context, sellerID uint64) ([]model.LiveRoom, error) {
-	return []model.LiveRoom{}, nil
+	rooms := make([]model.LiveRoom, 0)
+	for _, room := range s.rooms {
+		if room.SellerID == sellerID {
+			rooms = append(rooms, *room)
+		}
+	}
+	return rooms, nil
 }
 
 func (s *adminStoreStub) GetUser(_ context.Context, id uint64) (*model.User, error) {
@@ -347,6 +360,79 @@ func TestAdminServiceAuctionLifecycle(t *testing.T) {
 
 	if _, err := svc.UpdateAuction(ctx, auction.ID, AuctionPatchInput{BidIncrementCents: int64Ptr(2000)}); err != ErrAuctionNotEditable {
 		t.Fatalf("expected ErrAuctionNotEditable, got %v", err)
+	}
+}
+
+func TestAdminServiceStartsDueScheduledAuctions(t *testing.T) {
+	ctx := context.Background()
+	store := newAdminStoreStub()
+	svc := NewAdminService(store, nil)
+	fixedNow := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixedNow }
+
+	product, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "定时上架商品"})
+	if err != nil {
+		t.Fatalf("CreateProduct() error = %v", err)
+	}
+	dueStart := fixedNow.Add(-30 * time.Second)
+	dueEnd := dueStart.Add(120 * time.Second)
+	due, err := svc.CreateAuction(ctx, AuctionInput{
+		RoomID:            10,
+		ProductID:         product.ID,
+		StartPriceCents:   1000,
+		BidIncrementCents: 100,
+		StartAt:           &dueStart,
+		EndAt:             &dueEnd,
+	})
+	if err != nil {
+		t.Fatalf("CreateAuction(due) error = %v", err)
+	}
+	if _, err := svc.PublishAuction(ctx, due.ID); err != nil {
+		t.Fatalf("PublishAuction(due) error = %v", err)
+	}
+
+	futureStart := fixedNow.Add(1 * time.Minute)
+	futureEnd := futureStart.Add(90 * time.Second)
+	future, err := svc.CreateAuction(ctx, AuctionInput{
+		RoomID:            10,
+		ProductID:         product.ID,
+		StartPriceCents:   1000,
+		BidIncrementCents: 100,
+		StartAt:           &futureStart,
+		EndAt:             &futureEnd,
+	})
+	if err != nil {
+		t.Fatalf("CreateAuction(future) error = %v", err)
+	}
+	if _, err := svc.PublishAuction(ctx, future.ID); err != nil {
+		t.Fatalf("PublishAuction(future) error = %v", err)
+	}
+
+	count, err := svc.StartDueScheduledAuctions(ctx)
+	if err != nil {
+		t.Fatalf("StartDueScheduledAuctions() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 started auction, got %d", count)
+	}
+
+	started, err := svc.getAuction(ctx, due.ID)
+	if err != nil {
+		t.Fatalf("get due auction error = %v", err)
+	}
+	if started.Status != "running" {
+		t.Fatalf("expected due auction running, got %s", started.Status)
+	}
+	if !started.StartAt.Equal(fixedNow) || !started.EndAt.Equal(fixedNow.Add(120*time.Second)) {
+		t.Fatalf("unexpected due start/end: %s %s", started.StartAt, started.EndAt)
+	}
+
+	stillScheduled, err := svc.getAuction(ctx, future.ID)
+	if err != nil {
+		t.Fatalf("get future auction error = %v", err)
+	}
+	if stillScheduled.Status != "scheduled" {
+		t.Fatalf("expected future auction scheduled, got %s", stillScheduled.Status)
 	}
 }
 
