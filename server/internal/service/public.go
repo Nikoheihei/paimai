@@ -185,12 +185,13 @@ func (s *PublicService) GetRanking(ctx context.Context, auctionID uint64, limit 
 //
 // 写入路径（MySQL 唯一写入点）：
 //
-//	① Redis Lua 预校验（只读不写） → 快速拒绝非法出价
+//	① Redis 预校验（价格比较 + 幂等 + 频率） → 快速拒绝
 //	② MySQL 事务（bids + auctions 乐观锁 + outbox 事件）
-//	③ XADD Redis Stream（异步，失败不影响响应）
+//	③ outbox → Redis Stream → Consumer 更新 Redis 状态 + WS 广播
 //	④ 同步结算（仅触顶成交时）
 //
-// 幂等由 MySQL (auction_id, idempotency_key) 唯一索引保证。
+// Redis 仅作为缓存和预过滤层，MySQL 是唯一 Truth Source。
+// 只有 MySQL 乐观锁更新成功后，Consumer 才会更新 Redis 并广播 WS 事件。
 func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input BidInput) (*BidResult, error) {
 	if err := validateBidInput(auctionID, input); err != nil {
 		return nil, err
@@ -200,8 +201,8 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 	idemKey := fmt.Sprintf("idem:%d:%s", auctionID, md5Hash(input.IdempotencyKey))
 	inflightKey := fmt.Sprintf("idem_inflight:%d:%s", auctionID, md5Hash(input.IdempotencyKey))
 
-	// ① Redis Lua 预校验：幂等/cache/in-flight → 频率 → 金额校验
-	// 不做任何状态写入，失败时快速拒绝。
+	// ① Redis 预校验：幂等/cache → inflight → 频率 → 价格比较
+	// 如果 bidAmount <= Redis 当前价，直接拒绝，不进入 MySQL
 	if s.redis != nil && s.redis.Master != nil {
 		luaResult, err := runBidLiteScript(ctx, s.redis.Master, auctionID, input, now)
 		if err != nil {
@@ -213,7 +214,7 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			return s.readCachedBidResult(ctx, idemKey, auctionID, input.UserID), nil
 		}
 
-		// ② inflight 锁（Go 层 SETNX，30s TTL）：防止同一幂等键并发处理
+		// inflight 锁（Go 层 SETNX，30s TTL）：防止同一幂等键并发处理
 		set, err := s.redis.Master.SetNX(ctx, inflightKey, "1", 30*time.Second).Result()
 		if err != nil || !set {
 			return &BidResult{
@@ -224,13 +225,25 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			}, &BidRejectError{Code: "IN_FLIGHT", Message: bidRejectMessage("IN_FLIGHT")}
 		}
 
+		// 价格预过滤：bidAmount <= Redis 当前价 → 直接拒绝，不进入 MySQL
+		if luaResult.code == "BID_TOO_LOW" {
+			// 清理 inflightKey
+			go func() {
+				cleanCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				s.redis.Master.Del(cleanCtx, inflightKey)
+			}()
+			return luaResult.toBidResult(auctionID, input.UserID),
+				&BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
+		}
+
 		if !luaResult.accepted {
 			return luaResult.toBidResult(auctionID, input.UserID),
 				&BidRejectError{Code: luaResult.code, Message: bidRejectMessage(luaResult.code)}
 		}
 	}
 
-	// ② MySQL 事务写入
+	// ② MySQL 事务写入（唯一 Truth Source）
 	var result *BidResult
 	if err := s.admin.WithTx(ctx, func(tx repository.AdminStore) error {
 		// 读取当前竞拍（事务内读取，避免 snapshot 隔离导致 version 过期）
@@ -295,17 +308,12 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			// 唯一索引冲突 → 幂等重放
 			if strings.Contains(err.Error(), "Duplicate") || strings.Contains(err.Error(), "UNIQUE") {
 				result = s.assembleDuplicateBidResult(tx, ctx, auctionID, input, auction)
-				// 缓存完整结果到 Redis（之后同 key 走 Lua cache 路径）
+				// 仅缓存幂等结果到 Redis，不更新排行榜（Consumer 已处理过）
 				if s.redis != nil && s.redis.Master != nil {
 					resultJSON, _ := json.Marshal(result)
 					pipe := s.redis.Master.Pipeline()
 					pipe.Set(ctx, idemKey, string(resultJSON), 86400*time.Second)
 					pipe.Del(ctx, inflightKey)
-					rankingKey := fmt.Sprintf("auction:%d:bids", auctionID)
-					pipe.ZAdd(ctx, rankingKey, goredis.Z{
-						Score:  float64(result.CurrentPriceCents),
-						Member: strconv.FormatUint(result.UserID, 10),
-					})
 					pipe.Exec(ctx)
 				}
 				return nil
@@ -313,10 +321,7 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			return err
 		}
 
-		// 首次出价成功：in-flight 标记在 Lua 中已写入，缓存由事务完成后异步写入
-		// （见 PlaceBid 末尾的 deferred goroutine）
-
-		// 更新竞拍状态
+		// 更新竞拍状态（乐观锁）
 		auction.CurrentPriceCents = newPrice
 		auction.WinnerUserID = &input.UserID
 		auction.EndAt = newEndAt
@@ -325,7 +330,7 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			return err
 		}
 
-		// 写入 outbox 事件
+		// 写入 outbox 事件（MySQL 事务内，保证与 bid/auction 原子性）
 		eventPayload, _ := json.Marshal(map[string]interface{}{
 			"type":      "bid.accepted",
 			"auctionId": auctionID,
@@ -337,7 +342,6 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			"extended":  extended,
 			"roomId":    auction.RoomID,
 		})
-		// 生成事件 UUID 用于消费端去重
 		eventUUID := uuid()
 		if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
 			EventType: "bid.accepted",
@@ -348,9 +352,6 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			return err
 		}
 
-		// 构造结果
-		// 缓存最终响应到 Redis 并返回
-		// 此文本会在外部被替换 — 这里先标记位置
 		result = &BidResult{
 			Accepted:          true,
 			AuctionID:         auctionID,
@@ -374,7 +375,7 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		return nil, fmt.Errorf("unexpected nil result")
 	}
 	if !result.Accepted {
-		// 事务内 reject → 清理 inflightKey，避免阻塞后续重试
+		// 事务内 reject → 清理 inflightKey
 		if s.redis != nil && s.redis.Master != nil {
 			go func() {
 				cleanCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -388,7 +389,8 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 		return result, nil
 	}
 
-	// ③ 缓存完整响应到 Redis（24h TTL，覆盖 in-flight 标记）
+	// ③ 仅缓存幂等响应到 Redis + 清理 inflightKey
+	// Redis 状态更新（价格、排行榜）统一由 Consumer 在 outbox → stream 后完成
 	if s.redis != nil && s.redis.Master != nil {
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -400,12 +402,6 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			pipe := s.redis.Master.Pipeline()
 			pipe.Set(cacheCtx, idemKey, string(resultJSON), 86400*time.Second)
 			pipe.Del(cacheCtx, inflightKey)
-			// ZADD ranking（幂等写：同 Score 同 Member 多次调用结果一致）
-			rankingKey := fmt.Sprintf("auction:%d:bids", auctionID)
-			pipe.ZAdd(cacheCtx, rankingKey, goredis.Z{
-				Score:  float64(result.CurrentPriceCents),
-				Member: strconv.FormatUint(result.UserID, 10),
-			})
 			pipe.Exec(cacheCtx)
 		}()
 	}
@@ -413,7 +409,6 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 	// ④ 同步结算（触顶成交 — 带 2 次重试）
 	if result.Sold && s.settle != nil {
 		go func() {
-			// 先等待一小段时间让 MySQL 事务完全提交，避免结算时读不到最新状态
 			time.Sleep(200 * time.Millisecond)
 			settleWithRetry(context.Background(), auctionID, s.settle, 2)
 		}()
@@ -580,6 +575,7 @@ func runBidScript(ctx context.Context, client *goredis.Client, auctionID uint64,
 }
 
 // bidLiteScript 只做预校验的 Lua 脚本，不写入任何 Redis 状态。
+// 增加价格比较：bidAmount <= Redis 当前价 → 直接拒绝，不进入 MySQL。
 var bidLiteScript = goredis.NewScript(`
 local stateKey = KEYS[1]
 local idemKey = KEYS[2]
@@ -605,10 +601,13 @@ end
 local current = tonumber(redis.call("HGET", stateKey, "currentPriceCents") or "0")
 local endAt = tonumber(redis.call("HGET", stateKey, "endAtUnixMilli") or "0")
 
--- ② 频率检查（幂等检查之后，幂等重放不走此路径）
--- 频率检查：key 为 (userId + idempotencyKey hash)，同一 key 不触发频率拦截
--- 幂等重放（同 key）在前面的 EXISTS 检查中已处理，不会走到此处
--- 不同 key 的连续出价才需要频率限制
+-- ② 价格预过滤：bidAmount <= Redis 当前价 → 直接拒绝，不进入 MySQL
+local increment = tonumber(redis.call("HGET", stateKey, "bidIncrementCents") or "0")
+if increment > 0 and amount <= current then
+  return {0, amount, current, status, endAt, 0, 0, 0, 0, "BID_TOO_LOW"}
+end
+
+-- ③ 频率检查（幂等检查之后，幂等重放不走此路径）
 local lastBidKey = KEYS[3]
 local minIntervalMs = 1000
 local lastTs = redis.call("GET", lastBidKey)
@@ -623,7 +622,6 @@ if nowMs >= endAt then
   return {0, amount, current, status, endAt, 0, 0, 0, 0, "AUCTION_ENDED"}
 end
 
-local increment = tonumber(redis.call("HGET", stateKey, "bidIncrementCents") or "0")
 local capPrice = tonumber(redis.call("HGET", stateKey, "capPriceCents") or "0")
 local startPrice = tonumber(redis.call("HGET", stateKey, "startPriceCents") or "0")
 

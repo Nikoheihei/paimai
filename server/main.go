@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -65,6 +66,42 @@ func main() {
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
+		})
+	})
+
+	// WebSocket 诊断端点
+	r.GET("/api/ws-stats", func(c *gin.Context) {
+		stats := hub.Stats()
+		mCount, mTotalMs := websocketpkg.GetMarshalStats()
+		c.JSON(http.StatusOK, gin.H{
+			"code": 0,
+			"data": gin.H{
+				"connections":          stats.TotalConnections,
+				"rooms":                stats.TotalRooms,
+				"broadcast_count":      stats.BroadcastCount,
+				"broadcast_msgs":       stats.BroadcastMsgs,
+				"slow_broadcasts":      stats.SlowBroadcasts,
+				"slow_clients_dropped": stats.SlowClientsDropped,
+				"event_queue_len":      hub.EventQueueLen(),
+				"broadcast_wait_p50":   stats.BroadcastWaitP50,
+				"broadcast_wait_p95":   stats.BroadcastWaitP95,
+				"broadcast_wait_p99":   stats.BroadcastWaitP99,
+				"broadcast_cost_p50":   stats.BroadcastCostP50,
+				"broadcast_cost_p95":   stats.BroadcastCostP95,
+				"broadcast_cost_p99":   stats.BroadcastCostP99,
+			"send_channel_full":    stats.SendChannelFull,
+			"marshal_count":        mCount,
+			"marshal_total_ms":     mTotalMs,
+			"write_pump_count":     stats.WritePumpCount,
+			"write_pump_total_ms":  stats.WritePumpTotalMs,
+			"write_pump_msg_count": stats.WritePumpMsgCount,
+			"write_cost_p50":       stats.WriteCostP50,
+			"write_cost_p95":       stats.WriteCostP95,
+			"write_cost_p99":       stats.WriteCostP99,
+			"write_loop_p50":       stats.WriteLoopP50,
+			"write_loop_p95":       stats.WriteLoopP95,
+			"write_loop_p99":       stats.WriteLoopP99,
+		},
 		})
 	})
 
@@ -140,7 +177,15 @@ func main() {
 		}()
 	}
 
-	// 6. 启动服务
+	// 6. 启动 pprof 调试端口（单独 goroutine，不走 Gin 中间件）
+	go func() {
+		log.Println("pprof 调试端点: http://localhost:6060/debug/pprof/")
+		if err := http.ListenAndServe(":6060", nil); err != nil {
+			log.Printf("pprof server: %v", err)
+		}
+	}()
+
+	// 7. 启动服务
 	log.Printf("启动 Web 服务，监听端口: %s", cfg.ServerPort)
 	if err := r.Run(":" + cfg.ServerPort); err != nil {
 		log.Fatalf("启动服务失败: %v", err)

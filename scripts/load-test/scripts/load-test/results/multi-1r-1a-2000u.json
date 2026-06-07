@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-06-07T16:00:29.815Z",
+  "config": {
+    "rooms": 1,
+    "auctionsPerRoom": 1,
+    "totalAuctions": 1,
+    "users": 2000,
+    "durationSec": 20
+  },
+  "http": {
+    "total": 110324,
+    "2xx_rate": "50.3%",
+    "4xx_rate": "49.7%",
+    "system_error_rate": "0.00%",
+    "avgQps": 5302,
+    "durationMs": 20807
+  },
+  "bid": {
+    "total": 55162,
+    "accepted": 283,
+    "accepted_per_sec": "13.6",
+    "rejected": 54879,
+    "business_accept_rate": "0.5%",
+    "system_error": 0,
+    "top_reject_reasons": [
+      {
+        "reason": "出价被拒绝",
+        "count": 28008
+      },
+      {
+        "reason": "出价冲突，请重试",
+        "count": 26871
+      }
+    ]
+  },
+  "latency": {
+    "avg": 235,
+    "p50": 119,
+    "p95": 677,
+    "p99": 2164,
+    "max": 13173
+  },
+  "infrastructure": {
+    "mysql": {
+      "questions": 21012019,
+      "threads": 51,
+      "slow": 3
+    },
+    "redis": {
+      "total_commands_processed": "93063408",
+      "instantaneous_ops_per_sec": "14946",
+      "rejected_connections": "0"
+    }
+  }
+}

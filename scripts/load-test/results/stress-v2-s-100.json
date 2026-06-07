@@ -4,39 +4,40 @@
   "config": {
     "concurrency": 100,
     "auctions": 1,
-    "durationSec": 10
+    "durationSec": 15
   },
   "http": {
-    "total": 27406,
-    "2xx": 15472,
-    "2xx_rate": "56.5%",
-    "4xx": 1561,
-    "4xx_rate": "5.7%",
-    "5xx": 10373,
-    "5xx_rate": "37.8%",
+    "total": 41202,
+    "2xx": 23161,
+    "2xx_rate": "56.2%",
+    "4xx": 18041,
+    "4xx_rate": "43.8%",
+    "5xx": 0,
+    "5xx_rate": "0.0%",
     "timeout": 0,
     "timeout_rate": "0.0%",
-    "system_error_rate": "37.8%",
-    "avgQps": 2713
+    "system_error_rate": "0.0%",
+    "avgQps": 2730
   },
   "bid": {
-    "total": 3330,
-    "accepted": 1769,
-    "accepted_per_sec": "175.1",
-    "rejected": 1561,
-    "business_accept_rate": "53.1%",
-    "system_error": 10373,
+    "total": 20601,
+    "accepted": 2560,
+    "accepted_per_sec": "169.6",
+    "rejected": 18041,
+    "business_accept_rate": "12.4%",
+    "system_error": 0,
     "reject_reasons": {
-      "出价被拒绝": 1561
+      "出价冲突，请重试": 15709,
+      "出价被拒绝": 2332
     }
   },
   "latency": {
     "all": {
       "avg": 7,
       "p50": 6,
-      "p95": 18,
-      "p99": 33,
-      "max": 56
+      "p95": 14,
+      "p99": 36,
+      "max": 90
     }
   }
 }

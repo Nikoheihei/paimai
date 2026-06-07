@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -86,6 +87,9 @@ func (s *txGormAdminStore) CreateBid(ctx context.Context, bid *model.Bid) error 
 	return s.db.WithContext(ctx).Create(bid).Error
 }
 
+// ErrVersionConflict 乐观锁冲突错误，由上层转为 409。
+var ErrVersionConflict = errors.New("auction version conflict")
+
 func (s *txGormAdminStore) UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error {
 	result := s.db.WithContext(ctx).
 		Model(&model.Auction{}).
@@ -101,7 +105,7 @@ func (s *txGormAdminStore) UpdateAuctionBidState(ctx context.Context, auction *m
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("auction version conflict: id=%d version=%d", auction.ID, auction.Version)
+		return fmt.Errorf("%w: id=%d version=%d", ErrVersionConflict, auction.ID, auction.Version)
 	}
 	return nil
 }

@@ -1,0 +1,43 @@
+{
+  "mode": "single",
+  "label": "单拍卖 150人",
+  "config": {
+    "concurrency": 150,
+    "auctions": 1,
+    "durationSec": 15
+  },
+  "http": {
+    "total": 54560,
+    "2xx": 28461,
+    "2xx_rate": "52.2%",
+    "4xx": 26099,
+    "4xx_rate": "47.8%",
+    "5xx": 0,
+    "5xx_rate": "0.0%",
+    "timeout": 0,
+    "timeout_rate": "0.0%",
+    "system_error_rate": "0.0%",
+    "avgQps": 3612
+  },
+  "bid": {
+    "total": 27280,
+    "accepted": 1181,
+    "accepted_per_sec": "78.2",
+    "rejected": 26099,
+    "business_accept_rate": "4.3%",
+    "system_error": 0,
+    "reject_reasons": {
+      "出价冲突，请重试": 24211,
+      "出价被拒绝": 1888
+    }
+  },
+  "latency": {
+    "all": {
+      "avg": 16,
+      "p50": 14,
+      "p95": 38,
+      "p99": 63,
+      "max": 110
+    }
+  }
+}

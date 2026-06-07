@@ -4,39 +4,41 @@
   "config": {
     "concurrency": 200,
     "auctions": 1,
-    "durationSec": 10
+    "durationSec": 15
   },
   "http": {
-    "total": 40610,
-    "2xx": 20665,
-    "2xx_rate": "50.9%",
-    "4xx": 849,
-    "4xx_rate": "2.1%",
-    "5xx": 19096,
-    "5xx_rate": "47.0%",
+    "total": 60324,
+    "2xx": 30651,
+    "2xx_rate": "50.8%",
+    "4xx": 29673,
+    "4xx_rate": "49.2%",
+    "5xx": 0,
+    "5xx_rate": "0.0%",
     "timeout": 0,
     "timeout_rate": "0.0%",
-    "system_error_rate": "47.0%",
-    "avgQps": 4018
+    "system_error_rate": "0.0%",
+    "avgQps": 3997
   },
   "bid": {
-    "total": 1209,
-    "accepted": 360,
-    "accepted_per_sec": "35.6",
-    "rejected": 849,
-    "business_accept_rate": "29.8%",
-    "system_error": 19096,
+    "total": 30162,
+    "accepted": 489,
+    "accepted_per_sec": "32.4",
+    "rejected": 29673,
+    "business_accept_rate": "1.6%",
+    "system_error": 0,
     "reject_reasons": {
-      "出价被拒绝": 849
+      "出价冲突，请重试": 27002,
+      "竞拍已经结束": 1494,
+      "出价被拒绝": 1177
     }
   },
   "latency": {
     "all": {
       "avg": 32,
-      "p50": 30,
-      "p95": 54,
-      "p99": 86,
-      "max": 148
+      "p50": 31,
+      "p95": 57,
+      "p99": 91,
+      "max": 211
     }
   }
 }

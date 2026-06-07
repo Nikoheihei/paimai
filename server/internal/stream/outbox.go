@@ -33,7 +33,7 @@ func NewOutboxPoller(store repository.AdminStore, redis RedisXAdder) *OutboxPoll
 		redis:      redis,
 		streamKey:  "auction:events",
 		interval:   100 * time.Millisecond,
-		batchSize:  50,
+		batchSize:  500,
 	}
 }
 

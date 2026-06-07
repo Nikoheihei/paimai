@@ -38,7 +38,7 @@ const (
 	streamKey     = "auction:events"
 	consumerGroup = "auction:processors"
 	maxStreamLen  = 10000
-	pollInterval  = 2 * time.Second
+	pollInterval  = 100 * time.Millisecond
 )
 
 // Event 是 Stream 中每条消息的载荷结构。
@@ -158,12 +158,19 @@ func (c *Consumer) poll(ctx context.Context) {
 		Group:    consumerGroup,
 		Consumer: consumerName,
 		Streams:  []string{streamKey, ">"},
-		Count:    10,
+		Count:    500,
 		Block:    pollInterval,
 	}).Result()
 	if err != nil {
 		if err != goredis.Nil {
-			log.Printf("[stream] poll error: %v", err)
+			// NOGROUP: Stream 或 consumer group 被删除（如 FLUSHDB），自动重建
+			if strings.Contains(err.Error(), "NOGROUP") {
+				if e := c.ensureGroup(ctx); e != nil {
+					log.Printf("[stream] 重建消费者组失败: %v", e)
+				}
+			} else {
+				log.Printf("[stream] poll error: %v", err)
+			}
 		}
 		return
 	}

@@ -19,5 +19,8 @@
     "url": "https://github.com/Nikoheihei/paimai/issues"
   },
   "homepage": "https://github.com/Nikoheihei/paimai#readme",
-  "description": ""
+  "description": "",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
 }

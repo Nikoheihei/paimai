@@ -4,14 +4,15 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	gorillaWs "github.com/gorilla/websocket"
 
 	"paimai/internal/service"
 	ws "paimai/internal/websocket"
+	jwt2 "paimai/pkg/jwt"
 	"paimai/pkg/response"
-	"strings"
 )
 
 // UpgraderConfig 保存 WebSocket Upgrader 的配置选项。
@@ -112,6 +113,11 @@ func (h *PublicHandler) placeBid(c *gin.Context) {
 		response.Error(c, http.StatusConflict, 409, reject.Message)
 		return
 	}
+	// 乐观锁冲突也返回 409，而非 500
+	if err != nil && strings.Contains(err.Error(), "version conflict") {
+		response.Error(c, http.StatusConflict, 409, "出价冲突，请重试")
+		return
+	}
 	writeResult(c, result, err)
 }
 
@@ -129,11 +135,19 @@ func (h *PublicHandler) serveWS(c *gin.Context) {
 		return
 	}
 
-	// 优先从 JWT context 获取 userId，兼容开发阶段仍然传 query 参数
+	// 优先从 JWT context 获取 userId，其次从 token query 参数解析 JWT，最后兼容 query 参数传 userId
 	userID, _ := c.Get("userId")
 	var uid uint64
 	if userID != nil {
 		uid = userID.(uint64)
+	}
+	if uid == 0 {
+		// 尝试从 token query 参数解析 JWT
+		if tokenStr := c.Query("token"); tokenStr != "" {
+			if claims, err := jwt2.ParseToken(tokenStr); err == nil {
+				uid = claims.UserID
+			}
+		}
 	}
 	if uid == 0 {
 		userIDStr := c.DefaultQuery("userId", "0")
