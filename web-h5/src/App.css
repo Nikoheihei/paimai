@@ -1363,6 +1363,97 @@ html, body {
 .empty-state-box .empty-icon { font-size: 48px; margin-bottom: 12px; }
 .empty-state-box .sub { font-size: 12px; margin-top: 4px; }
 
+/* ---- 地址页：新建地址按钮 ---- */
+.add-address-btn {
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  padding: 8px 18px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  backdrop-filter: blur(8px);
+}
+.add-address-btn:hover {
+  background: var(--primary-grad);
+  border-color: transparent;
+  box-shadow: var(--shadow-glow);
+}
+
+/* ---- 地址表单：暗色输入框 ---- */
+.address-form .form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.address-form .form-row label {
+  width: 64px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  text-align: right;
+}
+.address-form .form-row .dark-input,
+.address-form .dark-input {
+  flex: 1;
+  background: rgba(0,0,0,.25);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s;
+}
+.address-form .dark-input:focus {
+  border-color: var(--primary);
+}
+.address-form .dark-input::placeholder {
+  color: var(--text-muted);
+}
+.address-form textarea.dark-input {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* ---- 表单操作按钮 ---- */
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.form-btn {
+  flex: 1;
+  padding: 11px 0;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+  border: none;
+}
+.form-btn.primary {
+  background: var(--primary-grad);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(254,44,85,.25);
+}
+.form-btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(254,44,85,.35);
+}
+.form-btn.secondary {
+  background: var(--glass-strong);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+}
+.form-btn.secondary:hover {
+  background: var(--glass);
+  color: var(--text-primary);
+}
+
 /* ================================================================
    SECTION 17: 弹幕层（BarrageLayer）
    ================================================================ */

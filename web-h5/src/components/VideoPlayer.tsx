@@ -12,12 +12,13 @@ import { useState, useEffect } from 'react'
 
 type Props = {
   coverUrl?: string
+  videoUrl?: string
   isLive: boolean
   viewerCount?: number
   roomTitle?: string
 }
 
-export default function VideoPlayer({ coverUrl, isLive, viewerCount = 0, roomTitle }: Props) {
+export default function VideoPlayer({ coverUrl, videoUrl, isLive, viewerCount = 0, roomTitle }: Props) {
   const [playing, setPlaying] = useState(false)
   // 模拟动态光效
   const [glowPhase, setGlowPhase] = useState(0)
@@ -32,7 +33,17 @@ export default function VideoPlayer({ coverUrl, isLive, viewerCount = 0, roomTit
     <div className="video-player">
       {/* 视频画面 / 渐变背景 */}
       <div className="vp-container" onClick={() => setPlaying(p => !p)}>
-        {coverUrl ? (
+        {videoUrl ? (
+          <video
+            src={videoUrl}
+            autoPlay
+            muted
+            loop
+            playsInline
+            controls={false}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : coverUrl ? (
           <img src={coverUrl} alt={roomTitle || '直播'} style={{ width:'100%',height:'100%',objectFit:'cover' }} />
         ) : (
           <div className="vp-showcase">

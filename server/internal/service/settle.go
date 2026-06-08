@@ -49,7 +49,8 @@ type OrderDetail struct {
 }
 
 // SettleAuction 对指定竞拍执行结算。
-// 幂等：已结算（sold/failed/cancelled）的竞拍直接返回已有订单信息。
+// running → 执行结算逻辑
+// sold / failed / cancelled / payment_timeout → 幂等返回已有结果，不重复生成订单
 func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*SettleResult, error) {
 	auction, err := s.adminStore.GetAuction(ctx, auctionID)
 	if err != nil {
@@ -59,7 +60,7 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 		return nil, err
 	}
 
-	// 幂等：已结算的竞拍不再处理
+	// 幂等：已终态的竞拍直接返回已有结果，不重复生成订单
 	if auction.Status == string(statemachine.StateSold) {
 		order, err := s.adminStore.GetOrderByAuction(ctx, auctionID)
 		if err == nil {
@@ -71,7 +72,13 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 				FinalPriceCents: auction.CurrentPriceCents,
 			}, nil
 		}
-		// 有 sold 状态但没有订单（数据异常），尝试生成
+		// 有 sold 状态但没有订单（数据异常），仅返回幂等结果，不重复生成
+		return &SettleResult{
+			AuctionID:       auctionID,
+			Settled:         false,
+			Status:          auction.Status,
+			FinalPriceCents: auction.CurrentPriceCents,
+		}, nil
 	}
 	if auction.Status == string(statemachine.StateFailed) ||
 		auction.Status == string(statemachine.StateCancelled) ||
@@ -83,8 +90,8 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 		}, nil
 	}
 
-	// running 或 sold（PlaceBid 触顶成交时已设置）均可结算
-	if auction.Status != string(statemachine.StateRunning) && auction.Status != string(statemachine.StateSold) {
+	// 只有 running 状态才执行结算
+	if auction.Status != string(statemachine.StateRunning) {
 		return nil, fmt.Errorf("%w: 只能结算进行中的竞拍, 当前状态: %s", ErrInvalidTransition, auction.Status)
 	}
 

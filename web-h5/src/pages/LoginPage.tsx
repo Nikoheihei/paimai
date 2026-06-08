@@ -15,7 +15,6 @@ export default function LoginPage({ onLogin }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [nickname, setNickname] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -26,7 +25,7 @@ export default function LoginPage({ onLogin }: Props) {
     try {
       const result = mode === 'login'
         ? await login(username, password)
-        : await register(username, password, nickname || undefined)
+        : await register(username, password)
       setToken(result.token)
       onLogin(result.userId)
     } catch (err: any) {
@@ -68,19 +67,6 @@ export default function LoginPage({ onLogin }: Props) {
               maxLength={64}
             />
           </div>
-
-          {mode === 'register' && (
-            <div className="form-group">
-              <label>昵称（可选）</label>
-              <input
-                type="text"
-                placeholder="不填则使用用户名"
-                value={nickname}
-                onChange={(e) => setNickname(e.target.value)}
-                maxLength={255}
-              />
-            </div>
-          )}
 
           {error && <p className="form-error">{error}</p>}
 

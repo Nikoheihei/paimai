@@ -280,7 +280,6 @@ export default function OrderPage() {
             ))}
             {filtered.length === 0 && (
               <div className="empty-state-box">
-                <div className="empty-icon">[订单]</div>
                 <p>{activeTab === 'all' ? '暂无订单' : `暂无${statusLabel[activeTab]}订单`}</p>
               </div>
             )}

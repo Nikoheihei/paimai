@@ -212,6 +212,14 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 		if product.Status != ProductStatusAvailable {
 			return fmt.Errorf("%w: product is %s", ErrInvalidInput, product.Status)
 		}
+		// 同一商品不能同时存在多个未完成竞拍（draft/scheduled/running/sold）
+		hasActive, err := tx.HasActiveAuctionByProduct(ctx, input.ProductID)
+		if err != nil {
+			return err
+		}
+		if hasActive {
+			return fmt.Errorf("%w: 该商品已有未完成竞拍，请先结算或取消", ErrInvalidInput)
+		}
 		if err := tx.CreateAuction(ctx, auction); err != nil {
 			return err
 		}
@@ -641,7 +649,8 @@ func (s *AdminService) RelistProduct(ctx context.Context, sellerID uint64, produ
 	return s.CreateAuction(ctx, input)
 }
 
-// OfflineProduct 将商品下架。已被竞拍占用的商品必须先等待竞拍结束或取消。
+// OfflineProduct 将商品下架。
+// 如果商品存在未完成竞拍（draft/scheduled/running/sold），禁止下架，必须先结算或取消竞拍。
 func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, productID uint64) (*model.Product, error) {
 	var product *model.Product
 	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
@@ -655,8 +664,13 @@ func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, prod
 		if sellerID != 0 && p.SellerID != sellerID {
 			return ErrUnauthorized
 		}
-		if p.Status == ProductStatusLocked {
-			return fmt.Errorf("%w: product has active auction", ErrInvalidInput)
+		// 存在任何未完成竞拍（draft/scheduled/running/sold）时禁止下架
+		hasActive, err := tx.HasActiveAuctionByProduct(ctx, productID)
+		if err != nil {
+			return err
+		}
+		if hasActive {
+			return fmt.Errorf("%w: 该商品存在未完成竞拍，请先结算或取消后再下架", ErrInvalidInput)
 		}
 		if p.Status == ProductStatusOffline {
 			product = p

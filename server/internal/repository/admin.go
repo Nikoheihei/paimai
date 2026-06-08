@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"paimai/internal/model"
+	"paimai/internal/statemachine"
 )
 
 // AuctionFilter 是后台竞拍列表的筛选条件。
@@ -60,6 +61,9 @@ type AdminStore interface {
 	PickPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxEventDone(ctx context.Context, id uint64) error
 	MarkOutboxEventFailed(ctx context.Context, id uint64) error
+
+	// 竞拍活跃状态检查
+	HasActiveAuctionByProduct(ctx context.Context, productID uint64) (bool, error)
 }
 
 // GormAdminStore 是基于 GORM 的 AdminStore 实现。
@@ -130,6 +134,15 @@ func (s *txGormAdminStore) MarkOutboxEventDone(ctx context.Context, id uint64) e
 
 func (s *txGormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) error {
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
+}
+
+func (s *txGormAdminStore) HasActiveAuctionByProduct(ctx context.Context, productID uint64) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&model.Auction{}).
+		Where("product_id = ? AND status IN ?", productID,
+			[]string{string(statemachine.StateDraft), string(statemachine.StateScheduled), string(statemachine.StateRunning), string(statemachine.StateSold)}).
+		Count(&count).Error
+	return count > 0, err
 }
 
 // txGormAdminStore 中需要实现的 AdminStore 其余方法（事务传播）
@@ -592,4 +605,13 @@ func (s *GormAdminStore) MarkOutboxEventDone(ctx context.Context, id uint64) err
 
 func (s *GormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) error {
 	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
+}
+
+func (s *GormAdminStore) HasActiveAuctionByProduct(ctx context.Context, productID uint64) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&model.Auction{}).
+		Where("product_id = ? AND status IN ?", productID,
+			[]string{string(statemachine.StateDraft), string(statemachine.StateScheduled), string(statemachine.StateRunning), string(statemachine.StateSold)}).
+		Count(&count).Error
+	return count > 0, err
 }

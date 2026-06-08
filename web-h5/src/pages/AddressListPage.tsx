@@ -110,8 +110,11 @@ export default function AddressListPage() {
 
   return (
     <div className="address-page">
-      <div className="page-header">
-        <button className="admin-btn primary" onClick={() => { setShowForm(!showForm); resetForm() }}>
+      <div className="page-header" style={{ justifyContent: 'flex-end', marginBottom: 12 }}>
+        <button
+          className="add-address-btn"
+          onClick={() => { setShowForm(!showForm); resetForm() }}
+        >
           {showForm ? '取消' : '+ 新建地址'}
         </button>
       </div>
@@ -119,17 +122,20 @@ export default function AddressListPage() {
       {showForm && (
         <div className="panel address-form">
           <h3>{editing ? '编辑地址' : '新建地址'}</h3>
-          <div className="field"><label>收货人</label><input value={name} onChange={e => setName(e.target.value)} placeholder="姓名" /></div>
-          <div className="field"><label>手机号</label><input value={phone} onChange={e => setPhone(e.target.value)} placeholder="手机号" /></div>
-          <div className="field"><label>省</label><input value={province} onChange={e => setProvince(e.target.value)} placeholder="省/直辖市" /></div>
-          <div className="field"><label>市</label><input value={city} onChange={e => setCity(e.target.value)} placeholder="市" /></div>
-          <div className="field"><label>区</label><input value={district} onChange={e => setDistrict(e.target.value)} placeholder="区/县" /></div>
-          <div className="field"><label>详细地址</label><textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder="街道、门牌号等" rows={2} /></div>
+          <div className="form-row"><label>收货人</label><input className="dark-input" value={name} onChange={e => setName(e.target.value)} placeholder="姓名" /></div>
+          <div className="form-row"><label>手机号</label><input className="dark-input" value={phone} onChange={e => setPhone(e.target.value)} placeholder="手机号" /></div>
+          <div className="form-row"><label>省</label><input className="dark-input" value={province} onChange={e => setProvince(e.target.value)} placeholder="省/直辖市" /></div>
+          <div className="form-row"><label>市</label><input className="dark-input" value={city} onChange={e => setCity(e.target.value)} placeholder="市" /></div>
+          <div className="form-row"><label>区</label><input className="dark-input" value={district} onChange={e => setDistrict(e.target.value)} placeholder="区/县" /></div>
+          <div className="form-row"><label>详细地址</label><textarea className="dark-input" value={detail} onChange={e => setDetail(e.target.value)} placeholder="街道、门牌号等" rows={2} /></div>
           <label className="default-check">
             <input type="checkbox" checked={isDefault} onChange={e => setIsDefault(e.target.checked)} />
             设为默认地址
           </label>
-          <button className="bid-btn" style={{ width: '100%', marginTop: 12 }} onClick={handleSave}>保存</button>
+          <div className="form-actions">
+            <button className="form-btn secondary" onClick={() => setShowForm(false)}>取消</button>
+            <button className="form-btn primary" onClick={handleSave}>保存</button>
+          </div>
         </div>
       )}
 

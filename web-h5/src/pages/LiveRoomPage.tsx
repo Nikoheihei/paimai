@@ -259,7 +259,7 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
     <div className="live-room-page">
       <div className="lrp-scroll-area">
         {/* A: 视频画面（全屏） */}
-        <VideoPlayer coverUrl={coverUrl} isLive={true} viewerCount={viewerCount} roomTitle={roomTitle} />
+        <VideoPlayer coverUrl={coverUrl} videoUrl="/videos/auction-demo.mp4" isLive={true} viewerCount={viewerCount} roomTitle={roomTitle} />
 
         {/* B: 主播信息卡 */}
         {anchorInfo ? (

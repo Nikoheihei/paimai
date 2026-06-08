@@ -320,7 +320,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                           <button className="admin-btn small primary" disabled={(p.status || 'available') !== 'available'} onClick={() => handleConfigureListing(p)}>
                             重新开拍
                           </button>
-                          {p.status !== 'offline' && <button className="admin-btn small" disabled={p.status === 'locked'} onClick={() => handleOfflineProduct(p.id)}>下架</button>}
+                          {p.status !== 'offline' && <button className="admin-btn small" disabled={p.status !== 'available'} onClick={() => handleOfflineProduct(p.id)}>下架</button>}
                           <button className="admin-btn small danger" onClick={() => handleDeleteProduct(p.id)}>删除</button>
                         </div>
                       </td>
@@ -475,7 +475,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                             {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small" onClick={() => handleSaveDuration(a)}>保存时长</button>}
                             {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small primary" onClick={() => handleManualList(a)}>手动上架</button>}
                             {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small danger" onClick={() => handleCancel(a.id)}>取消</button>}
-                            {(a.status === 'sold' || a.status === 'failed') && <button className="admin-btn small" onClick={() => handleSettle(a.id)}>结算</button>}
+                            {a.status === 'running' && <button className="admin-btn small primary" onClick={() => handleSettle(a.id)}>结算</button>}
                           </div>
                         </td>
                       </tr>
