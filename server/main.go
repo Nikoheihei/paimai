@@ -89,19 +89,19 @@ func main() {
 				"broadcast_cost_p50":   stats.BroadcastCostP50,
 				"broadcast_cost_p95":   stats.BroadcastCostP95,
 				"broadcast_cost_p99":   stats.BroadcastCostP99,
-			"send_channel_full":    stats.SendChannelFull,
-			"marshal_count":        mCount,
-			"marshal_total_ms":     mTotalMs,
-			"write_pump_count":     stats.WritePumpCount,
-			"write_pump_total_ms":  stats.WritePumpTotalMs,
-			"write_pump_msg_count": stats.WritePumpMsgCount,
-			"write_cost_p50":       stats.WriteCostP50,
-			"write_cost_p95":       stats.WriteCostP95,
-			"write_cost_p99":       stats.WriteCostP99,
-			"write_loop_p50":       stats.WriteLoopP50,
-			"write_loop_p95":       stats.WriteLoopP95,
-			"write_loop_p99":       stats.WriteLoopP99,
-		},
+				"send_channel_full":    stats.SendChannelFull,
+				"marshal_count":        mCount,
+				"marshal_total_ms":     mTotalMs,
+				"write_pump_count":     stats.WritePumpCount,
+				"write_pump_total_ms":  stats.WritePumpTotalMs,
+				"write_pump_msg_count": stats.WritePumpMsgCount,
+				"write_cost_p50":       stats.WriteCostP50,
+				"write_cost_p95":       stats.WriteCostP95,
+				"write_cost_p99":       stats.WriteCostP99,
+				"write_loop_p50":       stats.WriteLoopP50,
+				"write_loop_p95":       stats.WriteLoopP95,
+				"write_loop_p99":       stats.WriteLoopP99,
+			},
 		})
 	})
 
@@ -161,8 +161,11 @@ func main() {
 		if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 			log.Printf("启动时结算了 %d 个过期竞拍", count)
 		}
+		if count, err := settleService.CloseExpiredPaymentOrders(context.Background(), 500); err == nil && count > 0 {
+			log.Printf("启动时关闭了 %d 个支付超时订单", count)
+		}
 
-		// 定时结算过期竞拍（每 10 秒）
+		// 定时结算过期竞拍（每 3 秒）
 		go func() {
 			ticker := time.NewTicker(3 * time.Second)
 			defer ticker.Stop()
@@ -172,6 +175,19 @@ func main() {
 				}
 				if count, err := settleService.SettleExpiredAuctions(context.Background()); err == nil && count > 0 {
 					log.Printf("定时结算了 %d 个过期竞拍", count)
+				}
+			}
+		}()
+
+		// 定时关闭支付超时订单（每 10 秒）
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if count, err := settleService.CloseExpiredPaymentOrders(context.Background(), 500); err == nil && count > 0 {
+					log.Printf("定时关闭了 %d 个支付超时订单", count)
+				} else if err != nil {
+					log.Printf("定时关闭支付超时订单失败: %v", err)
 				}
 			}
 		}()

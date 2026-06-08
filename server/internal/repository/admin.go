@@ -23,6 +23,7 @@ type AdminStore interface {
 	ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error)
 	GetProduct(ctx context.Context, id uint64) (*model.Product, error)
 	UpdateProduct(ctx context.Context, product *model.Product) error
+	UpdateProductStatus(ctx context.Context, id uint64, status string) error
 	DeleteProduct(ctx context.Context, id uint64) error
 
 	CreateAuction(ctx context.Context, auction *model.Auction) error
@@ -45,6 +46,7 @@ type AdminStore interface {
 	ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error)
 	ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error)
 	UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error
+	ListExpiredPendingOrders(ctx context.Context, before time.Time, limit int) ([]model.Order, error)
 	ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error)
 
 	// Outbox 事件队列
@@ -258,7 +260,28 @@ func (s *txGormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, sta
 	if addressSnapshot != "" {
 		updates["address_snapshot"] = addressSnapshot
 	}
-	return s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates).Error
+	result := s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("order %d is not pending_payment, cannot update to %s", id, status)
+	}
+	return nil
+}
+
+func (s *txGormAdminStore) ListExpiredPendingOrders(ctx context.Context, before time.Time, limit int) ([]model.Order, error) {
+	var orders []model.Order
+	query := s.db.WithContext(ctx).
+		Where("status = ? AND created_at < ?", "pending_payment", before).
+		Order("id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
 }
 
 func (s *txGormAdminStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
@@ -277,7 +300,11 @@ func (s *txGormAdminStore) UpdateProduct(ctx context.Context, product *model.Pro
 		"name":        product.Name,
 		"image_url":   product.ImageURL,
 		"description": product.Description,
+		"status":      product.Status,
 	}).Error
+}
+func (s *txGormAdminStore) UpdateProductStatus(ctx context.Context, id uint64, status string) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
 }
 func (s *txGormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
 	var a []model.Auction
@@ -328,7 +355,12 @@ func (s *GormAdminStore) UpdateProduct(ctx context.Context, product *model.Produ
 		"name":        product.Name,
 		"image_url":   product.ImageURL,
 		"description": product.Description,
+		"status":      product.Status,
 	}).Error
+}
+
+func (s *GormAdminStore) UpdateProductStatus(ctx context.Context, id uint64, status string) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (s *GormAdminStore) DeleteProduct(ctx context.Context, id uint64) error {
@@ -487,6 +519,20 @@ func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, statu
 		return fmt.Errorf("order %d is not pending_payment, cannot update to %s", id, status)
 	}
 	return nil
+}
+
+func (s *GormAdminStore) ListExpiredPendingOrders(ctx context.Context, before time.Time, limit int) ([]model.Order, error) {
+	var orders []model.Order
+	query := s.db.WithContext(ctx).
+		Where("status = ? AND created_at < ?", "pending_payment", before).
+		Order("id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	return orders, nil
 }
 
 func (s *GormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {

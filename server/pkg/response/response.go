@@ -8,7 +8,7 @@ import (
 
 // Response 定义了统一的 API 响应结构体。
 type Response struct {
-	Code    int         `json:"code"`           // 业务错误码或状态码
+	Code    interface{} `json:"code"`           // 业务错误码或状态码
 	Message string      `json:"message"`        // 描述信息
 	Data    interface{} `json:"data,omitempty"` // 数据载荷
 }
@@ -23,7 +23,7 @@ func Success(c *gin.Context, data interface{}) {
 }
 
 // Fail 以 HTTP 200 返回业务失败响应，通过 Code 标识具体业务错误。
-func Fail(c *gin.Context, code int, msg string) {
+func Fail(c *gin.Context, code interface{}, msg string) {
 	c.JSON(http.StatusOK, Response{
 		Code:    code,
 		Message: msg,
@@ -31,9 +31,18 @@ func Fail(c *gin.Context, code int, msg string) {
 }
 
 // Error 以指定 HTTP 状态码返回系统错误或接口级错误响应。
-func Error(c *gin.Context, httpStatus int, code int, msg string) {
+func Error(c *gin.Context, httpStatus int, code interface{}, msg string) {
 	c.JSON(httpStatus, Response{
 		Code:    code,
 		Message: msg,
+	})
+}
+
+// ErrorWithData 以指定 HTTP 状态码返回错误响应，并携带额外数据字段。
+func ErrorWithData(c *gin.Context, httpStatus int, code interface{}, msg string, data interface{}) {
+	c.JSON(httpStatus, Response{
+		Code:    code,
+		Message: msg,
+		Data:    data,
 	})
 }

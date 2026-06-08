@@ -19,6 +19,7 @@ type adminStoreStub struct {
 	orders        map[uint64]*model.Order
 	rooms         map[uint64]*model.LiveRoom
 	users         map[uint64]*model.User
+	outboxEvents  []model.OutboxEvent
 	nextProductID uint64
 	nextAuctionID uint64
 	nextOrderID   uint64
@@ -44,6 +45,9 @@ func newAdminStoreStub() *adminStoreStub {
 func (s *adminStoreStub) CreateProduct(_ context.Context, product *model.Product) error {
 	product.ID = s.nextProductID
 	s.nextProductID++
+	if product.Status == "" {
+		product.Status = ProductStatusAvailable
+	}
 	cp := *product
 	s.products[product.ID] = &cp
 	return nil
@@ -250,7 +254,26 @@ func (s *adminStoreStub) UpdateOrderStatus(_ context.Context, id uint64, status 
 	if paidAt != nil {
 		order.PaidAt = paidAt
 	}
+	if addressID != nil {
+		order.AddressID = addressID
+	}
+	if addressSnapshot != "" {
+		order.AddressSnapshot = addressSnapshot
+	}
 	return nil
+}
+
+func (s *adminStoreStub) ListExpiredPendingOrders(_ context.Context, before time.Time, limit int) ([]model.Order, error) {
+	orders := make([]model.Order, 0)
+	for _, order := range s.orders {
+		if order.Status == "pending_payment" && order.CreatedAt.Before(before) {
+			orders = append(orders, *order)
+			if limit > 0 && len(orders) >= limit {
+				break
+			}
+		}
+	}
+	return orders, nil
 }
 
 func (s *adminStoreStub) ListRunningExpiredAuctions(_ context.Context) ([]model.Auction, error) {
@@ -287,6 +310,16 @@ func (s *adminStoreStub) UpdateAuctionBidState(_ context.Context, auction *model
 }
 
 func (s *adminStoreStub) CreateOutboxEvent(_ context.Context, evt *model.OutboxEvent) error {
+	cp := *evt
+	for _, existing := range s.outboxEvents {
+		if cp.EventUUID != "" && existing.EventUUID == cp.EventUUID {
+			return nil
+		}
+	}
+	if cp.ID == 0 {
+		cp.ID = uint64(len(s.outboxEvents) + 1)
+	}
+	s.outboxEvents = append(s.outboxEvents, cp)
 	return nil
 }
 
@@ -303,6 +336,23 @@ func (s *adminStoreStub) MarkOutboxEventFailed(_ context.Context, id uint64) err
 }
 
 func (s *adminStoreStub) UpdateProduct(_ context.Context, product *model.Product) error {
+	existing, ok := s.products[product.ID]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	existing.Name = product.Name
+	existing.ImageURL = product.ImageURL
+	existing.Description = product.Description
+	existing.Status = product.Status
+	return nil
+}
+
+func (s *adminStoreStub) UpdateProductStatus(_ context.Context, id uint64, status string) error {
+	product, ok := s.products[id]
+	if !ok {
+		return nil
+	}
+	product.Status = status
 	return nil
 }
 
@@ -374,6 +424,10 @@ func TestAdminServiceStartsDueScheduledAuctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
+	futureProduct, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "未来上架商品"})
+	if err != nil {
+		t.Fatalf("CreateProduct(future) error = %v", err)
+	}
 	dueStart := fixedNow.Add(-30 * time.Second)
 	dueEnd := dueStart.Add(120 * time.Second)
 	due, err := svc.CreateAuction(ctx, AuctionInput{
@@ -395,7 +449,7 @@ func TestAdminServiceStartsDueScheduledAuctions(t *testing.T) {
 	futureEnd := futureStart.Add(90 * time.Second)
 	future, err := svc.CreateAuction(ctx, AuctionInput{
 		RoomID:            10,
-		ProductID:         product.ID,
+		ProductID:         futureProduct.ID,
 		StartPriceCents:   1000,
 		BidIncrementCents: 100,
 		StartAt:           &futureStart,
@@ -571,7 +625,6 @@ func TestAdminServiceRejectsUnsupportedAuctionMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
-
 	_, err = svc.CreateAuction(ctx, AuctionInput{
 		RoomID:            10,
 		ProductID:         product.ID,
@@ -594,6 +647,10 @@ func TestAdminServiceListFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProduct() error = %v", err)
 	}
+	secondProduct, err := svc.CreateProduct(ctx, 1, ProductInput{SellerID: 1, Name: "测试商品二"})
+	if err != nil {
+		t.Fatalf("CreateProduct(second) error = %v", err)
+	}
 	first, err := svc.CreateAuction(ctx, AuctionInput{
 		RoomID:            10,
 		ProductID:         product.ID,
@@ -605,7 +662,7 @@ func TestAdminServiceListFilters(t *testing.T) {
 	}
 	second, err := svc.CreateAuction(ctx, AuctionInput{
 		RoomID:            20,
-		ProductID:         product.ID,
+		ProductID:         secondProduct.ID,
 		StartPriceCents:   200,
 		BidIncrementCents: 20,
 	})

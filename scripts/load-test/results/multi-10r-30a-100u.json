@@ -1,0 +1,114 @@
+{
+  "timestamp": "2026-06-08T05:42:57.365Z",
+  "config": {
+    "rooms": 10,
+    "auctionsPerRoom": 3,
+    "totalAuctions": 30,
+    "users": 100,
+    "durationSec": 15
+  },
+  "http": {
+    "total": 10008,
+    "2xx_rate": "74.7%",
+    "4xx_rate": "25.3%",
+    "system_error_rate": "0.00%",
+    "avgQps": 648,
+    "durationMs": 15448
+  },
+  "bid": {
+    "total": 5004,
+    "accepted": 2471,
+    "accepted_per_sec": "160.0",
+    "rejected": 2533,
+    "business_accept_rate": "49.4%",
+    "system_error": 0,
+    "reject_breakdown": {
+      "BID_TOO_LOW": 0,
+      "BID_TOO_FREQUENT": 2438,
+      "IN_FLIGHT": 0,
+      "AUCTION_NOT_RUNNING": 0,
+      "AUCTION_ENDED": 0,
+      "AUCTION_CACHE_MISSING": 0,
+      "BID_STEP_INVALID": 0,
+      "INVALID_RULE": 0,
+      "OPTIMISTIC_LOCK": 57,
+      "MYSQL_TOO_LOW": 0,
+      "MYSQL_NOT_RUNNING": 0,
+      "MYSQL_ENDED": 0,
+      "IDEMPOTENT_REPLAY": 0,
+      "UNKNOWN": 38
+    },
+    "top_reject_reasons": [
+      {
+        "reason": "出价过于频繁，请稍后再试",
+        "count": 2438
+      },
+      {
+        "reason": "出价冲突，请重试",
+        "count": 57
+      },
+      {
+        "reason": "出价被拒绝",
+        "count": 38
+      }
+    ]
+  },
+  "auction_distribution": {
+    "total_auctions": 30,
+    "requests_per_auction": {
+      "min": 131,
+      "p50": 159,
+      "p95": 218,
+      "max": 219,
+      "avg": 167
+    },
+    "accepted_per_auction": {
+      "min": 67,
+      "p50": 77,
+      "p95": 103,
+      "max": 111,
+      "avg": 82
+    },
+    "conflicts_per_auction": {
+      "min": 0,
+      "p50": 2,
+      "p95": 6,
+      "max": 6,
+      "avg": 2
+    }
+  },
+  "latency": {
+    "avg": 3,
+    "p50": 2,
+    "p95": 6,
+    "p99": 44,
+    "max": 79
+  },
+  "websocket": {
+    "connected": 100,
+    "failed": 0,
+    "disconnected": 0,
+    "connect_rate": "100.0%",
+    "messages_received": 25307,
+    "missing_timestamp": 0,
+    "broadcast_latency": {
+      "avg": 1,
+      "p50": 1,
+      "p95": 2,
+      "p99": 3,
+      "max": 25
+    }
+  },
+  "infrastructure": {
+    "mysql": {
+      "questions": 27988872,
+      "threads": 36,
+      "slow": 3
+    },
+    "redis": {
+      "total_commands_processed": "104649842",
+      "instantaneous_ops_per_sec": "2904",
+      "rejected_connections": "0"
+    }
+  }
+}

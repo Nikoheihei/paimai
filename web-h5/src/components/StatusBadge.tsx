@@ -15,6 +15,7 @@ const AUCTION_MAP: Record<AuctionStatus, { label: string; className: string }> =
   scheduled:   { label: '待开始',    className: 'badge-blue' },
   running:     { label: '竞拍中',   className: 'badge-red' },
   sold:        { label: '已成交',    className: 'badge-green' },
+  payment_timeout: { label: '支付超时', className: 'badge-gray' },
   failed:      { label: '流拍',      className: 'badge-gray' },
   cancelled:   { label: '已取消',    className: 'badge-gray' },
 }

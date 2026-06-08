@@ -43,7 +43,6 @@ export default function VideoPlayer({ coverUrl, isLive, viewerCount = 0, roomTit
               transform: `translateX(${Math.sin(glowPhase * Math.PI / 180) * 30}px)`,
               transition: 'transform .5s linear',
             }} />
-            <div className="vp-showcase-icon">&#128722;</div>
             <div className="vp-showcase-text">直播拍卖中</div>
           </div>
         )}

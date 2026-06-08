@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, listAuctions, updateAuction, publishAuction, startAuction, cancelAuction, createAuction, settleAuction, type LiveRoom, type Product, type Auction } from '../api/client'
+import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, offlineProduct, listAuctions, updateAuction, publishAuction, startAuction, cancelAuction, relistProduct, settleAuction, type LiveRoom, type Product, type Auction } from '../api/client'
 import ImageUploader from '../components/ImageUploader'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
@@ -79,6 +79,10 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     loadAuctions()
   }, [roomId, loadAuctions])
   useEffect(load, [load])
+  useEffect(() => {
+    const timer = window.setInterval(load, 10000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
   // === 房间操作 ===
   const handleGoLive = async () => {
@@ -104,7 +108,15 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     if (!confirm('确定删除该商品？')) return
     try { await deleteProduct(id); listProducts().then(setProducts); setMsg('商品已删除') } catch (err: any) { setMsg(err.message) }
   }
+  const handleOfflineProduct = async (id: number) => {
+    if (!confirm('确定下架该商品？下架后不会继续参与竞拍。')) return
+    try { await offlineProduct(id); listProducts().then(setProducts); setMsg('商品已下架') } catch (err: any) { setMsg(err.message) }
+  }
   const handleConfigureListing = (product: Product) => {
+    if ((product.status || 'available') !== 'available') {
+      setMsg('只有可上架商品才能重新开拍')
+      return
+    }
     setNewAuctionProductId(product.id)
     setNewListingLaunchMode('manual')
     setShowNewAuction(true)
@@ -138,9 +150,9 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     try {
       const durationSec = normalizeDuration(newAuctionDuration, 300)
       const endAt = new Date(startAt.getTime() + durationSec * 1000)
-      const auction = await createAuction(
-        roomId,
+      const auction = await relistProduct(
         newAuctionProductId,
+        roomId,
         newAuctionMode,
         yuanToCents(newAuctionStartPrice, 0),
         yuanToCents(newAuctionIncrement, 100),
@@ -161,6 +173,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
       setAuctionDurations(prev => ({ ...prev, [auction.id]: String(durationSec) }))
       setMsg(newListingLaunchMode === 'manual' ? '上架配置已保存' : newListingLaunchMode === 'scheduled' ? '定时上架已保存' : '商品已上架')
       loadAuctions()
+      listProducts().then(setProducts)
       setShowNewAuction(false)
       resetAuctionForm()
     } catch (err: any) { setMsg(err.message) }
@@ -173,6 +186,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
       await startAuction(auction.id, normalizeDuration(auctionDurations[auction.id] || durationFromAuction(auction)))
       setMsg('商品已上架')
       loadAuctions()
+      listProducts().then(setProducts)
     } catch (err: any) { setMsg(err.message) }
   }
   const handleSaveDuration = async (auction: Auction) => {
@@ -192,7 +206,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   }
   const handleSettle = async (id: number) => {
     if (!confirm('确定手动结算此竞拍？')) return
-    try { await settleAuction(id); setMsg('已结算'); loadAuctions() } catch (err: any) { setMsg(err.message) }
+    try { await settleAuction(id); setMsg('已结算'); loadAuctions(); listProducts().then(setProducts) } catch (err: any) { setMsg(err.message) }
   }
   const resetAuctionForm = () => {
     setNewAuctionProductId(0); setNewAuctionMode('sudden_death')
@@ -218,6 +232,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     if (mode === 'reserve') return '保留价'
     return '绝杀'
   }
+  const availableProducts = products.filter(p => (p.status || 'available') === 'available')
 
   if (!room) return <div className="admin-page"><p className="empty">加载中…</p></div>
 
@@ -287,7 +302,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
             {products.length > 0 ? (
               <table className="data-table">
                 <thead>
-                  <tr><th>缩略图</th><th>名称</th><th>描述</th><th>操作</th></tr>
+                  <tr><th>缩略图</th><th>名称</th><th>描述</th><th>状态</th><th>操作</th></tr>
                 </thead>
                 <tbody>
                   {products.map(p => (
@@ -299,9 +314,13 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                       </td>
                       <td><strong>{p.name}</strong><br /><span className="meta">ID: #{p.id}</span></td>
                       <td className="desc-cell">{p.description || '-'}</td>
+                      <td>{productStatusBadge(p.status)}</td>
                       <td>
                         <div className="action-cell">
-                          <button className="admin-btn small primary" onClick={() => handleConfigureListing(p)}>配置上架</button>
+                          <button className="admin-btn small primary" disabled={(p.status || 'available') !== 'available'} onClick={() => handleConfigureListing(p)}>
+                            重新开拍
+                          </button>
+                          {p.status !== 'offline' && <button className="admin-btn small" disabled={p.status === 'locked'} onClick={() => handleOfflineProduct(p.id)}>下架</button>}
                           <button className="admin-btn small danger" onClick={() => handleDeleteProduct(p.id)}>删除</button>
                         </div>
                       </td>
@@ -336,7 +355,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                         <label>商品 *</label>
                         <select value={newAuctionProductId} onChange={e => setNewAuctionProductId(parseInt(e.target.value) || 0)}>
                           <option value={0}>选择商品…</option>
-                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          {availableProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
                       </div>
                       <div className="field">
@@ -424,6 +443,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                     let priceLabel = '-'; let priceVal = a.startPriceCents
                     switch (a.status) {
                       case 'sold': priceLabel = '落槌价'; priceVal = a.currentPriceCents; break
+                      case 'payment_timeout': priceLabel = '失效成交价'; priceVal = a.currentPriceCents; break
                       case 'running': priceLabel = a.currentPriceCents > 0 ? '当前最高价' : '起拍价'; priceVal = a.currentPriceCents > 0 ? a.currentPriceCents : a.startPriceCents; break
                       case 'scheduled': priceLabel = '起拍价'; break
                       case 'draft': priceLabel = '起拍价'; break
@@ -473,15 +493,26 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   )
 }
 
-function statusBadge(s: string): React.ReactNode {
+function statusBadge(s: string) {
   const map: Record<string, { text: string; cls: string }> = {
     draft:     { text: '待手动上架', cls: 'badge-gray' },
     scheduled: { text: '定时待上架', cls: 'badge-blue' },
     running:   { text: '已上架竞拍中', cls: 'badge-red' },
     sold:      { text: '已成交', cls: 'badge-green' },
+    payment_timeout: { text: '支付超时', cls: 'badge-gray' },
     failed:    { text: '流拍', cls: 'badge-gray' },
     cancelled: { text: '已下架/取消', cls: 'badge-gray' },
   }
   const info = map[s] || { text: s, cls: 'badge-gray' }
+  return <span className={`status-badge ${info.cls}`}>{info.text}</span>
+}
+
+function productStatusBadge(status?: Product['status']) {
+  const map: Record<string, { text: string; cls: string }> = {
+    available: { text: '可上架', cls: 'badge-green' },
+    locked: { text: '已占用', cls: 'badge-blue' },
+    offline: { text: '已下架', cls: 'badge-gray' },
+  }
+  const info = map[status || 'available'] || { text: status || '可上架', cls: 'badge-gray' }
   return <span className={`status-badge ${info.cls}`}>{info.text}</span>
 }

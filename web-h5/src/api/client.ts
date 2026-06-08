@@ -11,7 +11,7 @@ const BASE = '/api'
 const TOKEN_KEY = 'paimai_token'
 
 type ApiEnvelope<T> = {
-  code: number
+  code: number | string
   message?: string
   data: T
 }

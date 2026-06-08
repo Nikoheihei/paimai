@@ -30,6 +30,8 @@ func RegisterAdminRoutes(r gin.IRouter, adminService *service.AdminService) {
 		admin.GET("/products/:id", h.getProduct)
 		admin.PATCH("/products/:id", h.updateProduct)
 		admin.DELETE("/products/:id", h.deleteProduct)
+		admin.POST("/products/:id/relist", h.relistProduct)
+		admin.POST("/products/:id/offline", h.offlineProduct)
 
 		admin.POST("/auctions", h.createAuction)
 		admin.GET("/auctions", h.listAuctions)
@@ -67,6 +69,30 @@ func (h *AdminHandler) createAuction(c *gin.Context) {
 	}
 	auction, err := h.service.CreateAuction(c.Request.Context(), input)
 	writeResult(c, auction, err)
+}
+
+// relistProduct 基于指定商品创建一场新的竞拍。
+func (h *AdminHandler) relistProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var input service.AuctionInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	auction, err := h.service.RelistProduct(c.Request.Context(), mustGetUserID(c), id, input)
+	writeResult(c, auction, err)
+}
+
+// offlineProduct 将商品下架，避免继续参与竞拍。
+func (h *AdminHandler) offlineProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	product, err := h.service.OfflineProduct(c.Request.Context(), mustGetUserID(c), id)
+	writeResult(c, product, err)
 }
 
 // listAuctions 解析竞拍列表筛选参数，并返回后台竞拍列表。
@@ -264,6 +290,8 @@ func writeResult(c *gin.Context, data interface{}, err error) {
 		response.Error(c, http.StatusNotFound, 404, "resource not found")
 	case errors.Is(err, service.ErrBidEngineUnavailable):
 		response.Error(c, http.StatusServiceUnavailable, 503, "bid engine unavailable")
+	case errors.Is(err, service.ErrOrderPaymentTimeout):
+		response.Error(c, http.StatusConflict, "ORDER_PAYMENT_TIMEOUT", err.Error())
 	case errors.Is(err, service.ErrInvalidTransition):
 		response.Error(c, http.StatusConflict, 409, err.Error())
 	case errors.Is(err, service.ErrUnauthorized):

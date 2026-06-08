@@ -1,68 +1,109 @@
 {
-  "timestamp": "2026-06-07T14:01:10.448Z",
+  "timestamp": "2026-06-07T17:21:48.585Z",
   "config": {
     "rooms": 100,
     "auctionsPerRoom": 3,
     "totalAuctions": 300,
     "users": 1000,
-    "durationSec": 15
+    "durationSec": 20
   },
   "http": {
-    "total": 86268,
-    "2xx_rate": "90.0%",
-    "4xx_rate": "10.0%",
+    "total": 111938,
+    "2xx_rate": "89.2%",
+    "4xx_rate": "10.8%",
     "system_error_rate": "0.00%",
-    "avgQps": 5546,
-    "durationMs": 15556
+    "avgQps": 5452,
+    "durationMs": 20531
   },
   "bid": {
-    "total": 43134,
-    "accepted": 34474,
-    "accepted_per_sec": "2216.1",
-    "rejected": 8660,
-    "business_accept_rate": "79.9%",
+    "total": 55969,
+    "accepted": 43930,
+    "accepted_per_sec": "2139.7",
+    "rejected": 12039,
+    "business_accept_rate": "78.5%",
     "system_error": 0,
+    "reject_breakdown": {
+      "redis_too_low": 0,
+      "redis_not_running": 0,
+      "redis_ended": 0,
+      "redis_too_frequent": 0,
+      "redis_in_flight": 0,
+      "redis_cache_miss": 0,
+      "redis_step_invalid": 0,
+      "redis_other": 3752,
+      "mysql_too_low": 0,
+      "mysql_not_running": 0,
+      "mysql_ended": 0,
+      "mysql_optimistic_lock": 8287,
+      "mysql_duplicate": 0,
+      "unknown": 0
+    },
     "top_reject_reasons": [
       {
         "reason": "出价冲突，请重试",
-        "count": 6181
+        "count": 8287
       },
       {
         "reason": "出价被拒绝",
-        "count": 2479
+        "count": 3752
       }
     ]
   },
+  "auction_distribution": {
+    "total_auctions": 300,
+    "requests_per_auction": {
+      "min": 144,
+      "p50": 175,
+      "p95": 238,
+      "max": 262,
+      "avg": 187
+    },
+    "accepted_per_auction": {
+      "min": 110,
+      "p50": 141,
+      "p95": 182,
+      "max": 196,
+      "avg": 146
+    },
+    "conflicts_per_auction": {
+      "min": 10,
+      "p50": 25,
+      "p95": 45,
+      "max": 51,
+      "avg": 28
+    }
+  },
   "latency": {
-    "avg": 37,
-    "p50": 30,
-    "p95": 83,
-    "p99": 187,
-    "max": 556
+    "avg": 41,
+    "p50": 32,
+    "p95": 95,
+    "p99": 220,
+    "max": 572
   },
   "websocket": {
     "connected": 1000,
     "failed": 0,
     "disconnected": 0,
     "connect_rate": "100.0%",
-    "messages_received": 11658,
+    "messages_received": 14678,
+    "missing_timestamp": 0,
     "broadcast_latency": {
-      "avg": 278,
-      "p50": 242,
-      "p95": 675,
-      "p99": 837,
-      "max": 1036
+      "avg": 2,
+      "p50": 1,
+      "p95": 7,
+      "p99": 12,
+      "max": 116
     }
   },
   "infrastructure": {
     "mysql": {
-      "questions": 19141226,
+      "questions": 26051823,
       "threads": 51,
       "slow": 3
     },
     "redis": {
-      "total_commands_processed": "89715870",
-      "instantaneous_ops_per_sec": "19561",
+      "total_commands_processed": "101784895",
+      "instantaneous_ops_per_sec": "22220",
       "rejected_connections": "0"
     }
   }

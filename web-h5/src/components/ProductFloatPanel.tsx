@@ -13,7 +13,7 @@ const TABS: { key: TabKey; label: string; filter?: AuctionStatus | AuctionStatus
   { key: 'all', label: '全部' },
   { key: 'running', label: '在拍', filter: 'running' },
   { key: 'scheduled', label: '即将开拍', filter: 'scheduled' },
-  { key: 'ended', label: '成交', filter: ['sold', 'failed', 'cancelled'] },
+  { key: 'ended', label: '已结束', filter: ['sold', 'failed', 'cancelled', 'payment_timeout'] },
 ]
 
 type Props = {
@@ -48,7 +48,9 @@ export default function ProductFloatPanel({
   // 价格文案规则
   function priceLabel(a: Auction): string {
     switch (a.status) {
-      case 'sold':     return '落槌价'
+      case 'sold':
+      case 'payment_timeout':
+        return '落槌价'
       case 'running':  return a.currentPriceCents > 0 ? '当前最高价' : '起拍价'
       case 'scheduled':return '起拍价'
       default:         return '-'
@@ -57,7 +59,7 @@ export default function ProductFloatPanel({
 
   // 价格值：成交显示最终价，否则显示起拍价或当前价
   function priceCents(a: Auction): number {
-    return a.status === 'sold' ? a.currentPriceCents
+    return (a.status === 'sold' || a.status === 'payment_timeout') ? a.currentPriceCents
       : a.currentPriceCents > 0 ? a.currentPriceCents
       : a.startPriceCents
   }
@@ -68,6 +70,7 @@ export default function ProductFloatPanel({
       case 'running':   return '竞拍中'
       case 'scheduled': return '即将开拍'
       case 'sold':      return '已成交'
+      case 'payment_timeout': return '支付超时'
       case 'failed':    return '流拍'
       case 'cancelled': return '已取消'
       default:          return '草稿'

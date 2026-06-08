@@ -23,6 +23,16 @@ function parseUserIdFromToken(): number {
   } catch { return 0 }
 }
 
+function wsEventAuctionId(message: WsMessage): number | undefined {
+  const data = message.data as { auctionId?: number; payload?: { auctionId?: number } } | undefined
+  return data?.auctionId ?? data?.payload?.auctionId
+}
+
+function wsEventBuyerId(message: WsMessage): number | undefined {
+  const data = message.data as { buyerId?: number; payload?: { buyerId?: number } } | undefined
+  return data?.buyerId ?? data?.payload?.buyerId
+}
+
 type Props = {
   auctionId: number
   onBack: () => void
@@ -46,6 +56,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   const payTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const payTriggeredRef = useRef<number | null>(null)
   const payDeadlineRef = useRef(0)
+  const handledWsMessageRef = useRef<WsMessage | null>(null)
 
   const { connected: _wsConnected } = useWebSocket(auction?.roomId || 0, userId, {
     onMessage: (msg) => setLastMessage(msg),
@@ -57,15 +68,6 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
   }, [auctionId])
 
   useEffect(() => { load() }, [load])
-
-  // WS 消息处理
-  useEffect(() => {
-    if (!lastMessage || !auction) return
-    const msgType = lastMessage.type
-    if (msgType === 'bid.accepted' || msgType === 'price.updated' || msgType === 'auction.extended' || msgType === 'auction.ended') {
-      load()
-    }
-  }, [lastMessage, auction, load])
 
   const stopPayCountdown = useCallback(() => {
     if (payTimerRef.current) {
@@ -94,6 +96,39 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
       payTimerRef.current = setInterval(tick, 1000)
     }
   }, [stopPayCountdown])
+
+  // WS 消息处理
+  useEffect(() => {
+    if (!lastMessage || !auction) return
+    if (handledWsMessageRef.current === lastMessage) return
+    handledWsMessageRef.current = lastMessage
+    const msgType = lastMessage.type
+    if (msgType === 'bid.accepted' || msgType === 'price.updated' || msgType === 'auction.extended' || msgType === 'auction.ended') {
+      load()
+      return
+    }
+    if (msgType === 'order.paid') {
+      const eventAuctionId = wsEventAuctionId(lastMessage)
+      if (eventAuctionId && eventAuctionId !== auction.id) return
+      load()
+      if (wsEventBuyerId(lastMessage) === userId) {
+        setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
+        setShowPayModal(false)
+        stopPayCountdown()
+      }
+    }
+    if (msgType === 'order.closed' || msgType === 'auction.payment_timeout') {
+      const eventAuctionId = wsEventAuctionId(lastMessage)
+      if (eventAuctionId && eventAuctionId !== auction.id) return
+      load()
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      if (auction.winnerUserId === userId || wsEventBuyerId(lastMessage) === userId) {
+        setShowPayModal(false)
+        stopPayCountdown()
+        Toast.error('支付超时，订单已关闭')
+      }
+    }
+  }, [lastMessage, auction, load, stopPayCountdown, userId])
 
   const loadPaymentOrder = useCallback(async (targetAuctionId: number): Promise<Order | null> => {
     const orders = await listBuyerOrders(targetAuctionId)
@@ -128,6 +163,14 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
           stopPayCountdown()
           return
         }
+        if (order.status === 'closed') {
+          setPayOrder(order)
+          payTriggeredRef.current = soldWinnerAuctionId
+          stopPayCountdown()
+          Toast.error('支付超时，订单已关闭')
+          load()
+          return
+        }
         setPayOrder(order)
         payTriggeredRef.current = soldWinnerAuctionId
         startPayCountdown(paymentDeadlineMs(order.createdAt))
@@ -138,7 +181,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
       })
 
     return () => { cancelled = true }
-  }, [loadPaymentOrder, paidAuctionIds, payOrder?.auctionId, soldWinnerAuctionId, startPayCountdown, stopPayCountdown])
+  }, [load, loadPaymentOrder, paidAuctionIds, payOrder?.auctionId, soldWinnerAuctionId, startPayCountdown, stopPayCountdown])
 
   useEffect(() => () => stopPayCountdown(), [stopPayCountdown])
 
@@ -174,6 +217,14 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
         setPayOrder(order)
         setPaidAuctionIds(prev => prev.includes(auction.id) ? prev : [...prev, auction.id])
         Toast.success('支付成功！')
+        load()
+        return
+      }
+      if (order.status === 'closed') {
+        setPayOrder(order)
+        stopPayCountdown()
+        Toast.error('支付超时，订单已关闭')
+        load()
         return
       }
       setPayOrder(order)
@@ -182,7 +233,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
     } catch (err: any) {
       Toast.error(err.message || '加载订单失败')
     }
-  }, [auction, loadPaymentOrder, paidAuctionIds, payOrder, startPayCountdown, userId])
+  }, [auction, load, loadPaymentOrder, paidAuctionIds, payOrder, startPayCountdown, stopPayCountdown, userId])
 
   const handlePay = async () => {
     if (!auction) return
@@ -208,6 +259,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
         Toast.success('支付成功！')
         setShowPayModal(false)
         stopPayCountdown()
+        load()
         return
       }
       const snapshot = `${selectedAddress.name} ${selectedAddress.phone} ${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail}`
@@ -222,6 +274,12 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
       load()
     } catch (err: any) {
       Toast.error(err.message || '支付失败')
+      if (String(err.message || '').includes('timeout')) {
+        setShowPayModal(false)
+        stopPayCountdown()
+        window.dispatchEvent(new CustomEvent('order:refresh'))
+        load()
+      }
     } finally {
       setPayLoading(false)
     }
@@ -288,6 +346,9 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
               <div key={idx} className={`history-item ${item.userId === userId ? 'is-me' : ''}`}>
                 <span className="history-rank">#{item.rank}</span>
                 <span className="history-user">{item.userId === userId ? '我' : `用户${item.userId}`}</span>
+                {isCurrentPaid && item.userId === userId && (
+                  <span className="history-paid-badge">已支付</span>
+                )}
                 <span className="history-amount">¥{formatCents(item.amountCents)}</span>
               </div>
             ))}
@@ -326,7 +387,7 @@ export default function AuctionDetailPage({ auctionId, onBack }: Props) {
 
       {!isRunning && (
         <div className="detail-ended-notice">
-          <div>{auction.status === 'sold' ? '竞拍已成交' : auction.status === 'failed' ? '竞拍流拍' : '竞拍未开始'}</div>
+          <div>{auction.status === 'sold' ? '竞拍已成交' : auction.status === 'payment_timeout' ? '支付超时，成交失效' : auction.status === 'failed' ? '竞拍流拍' : '竞拍未开始'}</div>
           {auction.status === 'sold' && auction.winnerUserId === userId && (
             <button
               className="bid-btn-primary detail-pay-btn"

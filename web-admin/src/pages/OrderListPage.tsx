@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listOrders, type Order } from '../api/client'
+import { getOrderDetail, listOrders, type Order } from '../api/client'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
 
@@ -30,12 +30,28 @@ export default function OrderListPage() {
   const load = () => { listOrders().then(setOrders).catch(() => {}) }
   useEffect(load, [])
 
+  useEffect(() => {
+    const refresh = () => {
+      load()
+      if (detail?.id) {
+        getOrderDetail(detail.id).then(setDetail).catch(() => {})
+      }
+    }
+    const timer = window.setInterval(refresh, 10000)
+    return () => window.clearInterval(timer)
+  }, [detail?.id])
+
   // 监听订单刷新事件（竞拍成交后自动刷新）
   useEffect(() => {
-    const handler = () => { load() }
+    const handler = () => {
+      load()
+      if (detail?.id) {
+        getOrderDetail(detail.id).then(setDetail).catch(() => {})
+      }
+    }
     window.addEventListener('order:refresh', handler)
     return () => window.removeEventListener('order:refresh', handler)
-  }, [])
+  }, [detail?.id])
 
   useEffect(() => {
     let result = orders
@@ -147,6 +163,10 @@ export default function OrderListPage() {
               <div className="info-row"><span>卖家ID</span><span>#{detail.sellerId}</span></div>
               <div className="info-row"><span>最终价格</span><span className="price">¥{formatCents(detail.finalPriceCents)}</span></div>
               <div className="info-row"><span>状态</span><span className={`status-badge ${statusBadgeClass[detail.status]}`}>{statusLabel[detail.status]}</span></div>
+              <div className="info-row">
+                <span>收货地址</span>
+                <span style={{ textAlign: 'right', maxWidth: '60%' }}>{detail.addressSnapshot || '未记录'}</span>
+              </div>
               <div className="info-row"><span>创建时间</span><span>{new Date(detail.createdAt).toLocaleString('zh-CN')}</span></div>
               {detail.paidAt && <div className="info-row"><span>支付时间</span><span>{new Date(detail.paidAt).toLocaleString('zh-CN')}</span></div>}
             </div>

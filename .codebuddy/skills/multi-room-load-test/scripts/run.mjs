@@ -96,10 +96,11 @@ async function main() {
       method: 'POST', body: JSON.stringify({ title: `房间${r + 1}`, coverUrl: '' }),
     })
     await apiAuth(`/api/admin/rooms/${room.id}/live`, sellerToken, { method: 'POST' })
-    const product = await apiAuth('/api/admin/products', sellerToken, {
-      method: 'POST', body: JSON.stringify({ name: `商品R${r + 1}`, description: 'test', imageUrl: '' }),
-    })
     for (let a = 0; a < AUCTIONS_PER_ROOM; a++) {
+      // 每个拍卖独立商品，避免 product locked
+      const product = await apiAuth('/api/admin/products', sellerToken, {
+        method: 'POST', body: JSON.stringify({ name: `商品R${r + 1}A${a + 1}`, description: 'test', imageUrl: '' }),
+      })
       const auction = await apiAuth('/api/admin/auctions', sellerToken, {
         method: 'POST',
         body: JSON.stringify({
@@ -134,8 +135,8 @@ async function main() {
   // WS 指标
   let wsConnected = 0, wsFailed = 0, wsDisconnected = 0
   let wsMsgReceived = 0
-  const wsLatencies = [] // 广播延迟: WS消息到达时间 - HTTP出价成功时间
-  const userBidTimestamps = new Map() // userId -> lastBidTime（用于计算广播延迟）
+  let wsMissingTimestamp = 0
+  const wsLatencies = [] // 广播延迟: WS消息到达时间 - serverSentAt
 
   // 建立 WebSocket 连接
   const wsSockets = []
@@ -156,10 +157,15 @@ async function main() {
             wsMsgReceived++
             try {
               const msg = JSON.parse(data.toString())
-              // 计算广播延迟：消息到达时间 - 最后出价时间
-              const lastBidTime = userBidTimestamps.get(user.userId)
-              if (lastBidTime && (msg.type === 'bid.accepted' || msg.type === 'auction.updated')) {
-                wsLatencies.push(Date.now() - lastBidTime)
+              // 优先读取 serverSentAt / eventSentAt / sentAt
+              const sentAt = msg.serverSentAt || msg.eventSentAt || msg.sentAt
+              if (sentAt && (msg.type === 'bid.accepted' || msg.type === 'auction.updated')) {
+                const delay = Date.now() - sentAt
+                if (delay >= 0 && delay < 60000) {
+                  wsLatencies.push(delay)
+                }
+              } else if (msg.type === 'bid.accepted' || msg.type === 'auction.updated') {
+                wsMissingTimestamp++
               }
             } catch (_) {}
           })
@@ -185,6 +191,23 @@ async function main() {
   let httpTotal = 0, http2xx = 0, http4xx = 0, http5xx = 0, httpTimeout = 0
   let bidAccepted = 0, bidRejected = 0, bidSystemError = 0
   const rejectReasons = {}
+  const rejectByCode = {
+    BID_TOO_LOW: 0,
+    BID_TOO_FREQUENT: 0,
+    IN_FLIGHT: 0,
+    AUCTION_NOT_RUNNING: 0,
+    AUCTION_ENDED: 0,
+    AUCTION_CACHE_MISSING: 0,
+    BID_STEP_INVALID: 0,
+    INVALID_RULE: 0,
+    OPTIMISTIC_LOCK: 0,
+    MYSQL_TOO_LOW: 0,
+    MYSQL_NOT_RUNNING: 0,
+    MYSQL_ENDED: 0,
+    IDEMPOTENT_REPLAY: 0,
+    UNKNOWN: 0,
+  }
+  const auctionStats = new Map() // auctionId -> { requests, accepted, rejected, conflicts }
   const latencies = []
   const startTime = Date.now()
 
@@ -195,6 +218,13 @@ async function main() {
     const a = myAuctions[randInt(0, myAuctions.length - 1)]
     const auctionId = a.auctionId
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${user.token}` }
+
+    // 初始化 auction 统计
+    if (!auctionStats.has(auctionId)) {
+      auctionStats.set(auctionId, { requests: 0, accepted: 0, rejected: 0, conflicts: 0 })
+    }
+    const aStat = auctionStats.get(auctionId)
+    aStat.requests++
 
     // 1. 获取拍卖详情
     let res
@@ -214,7 +244,6 @@ async function main() {
     const amount = cp + steps * 100
     const idemKey = `mr-${auctionId}-${user.userId}-${iter}-${Date.now()}`
     const tBid = Date.now()
-    userBidTimestamps.set(user.userId, tBid) // 记录出价时间，用于 WS 广播延迟计算
 
     try {
       res = await fetch(`${BASE}/api/auctions/${auctionId}/bids`, {
@@ -229,14 +258,36 @@ async function main() {
     if (res.status >= 200 && res.status < 300) {
       http2xx++
       const body = await res.json()
-      if (body.data?.accepted) bidAccepted++
-      else { bidRejected++; const r = body.message || '?'; rejectReasons[r] = (rejectReasons[r] || 0) + 1 }
+      if (body.data?.accepted) {
+        bidAccepted++
+        aStat.accepted++
+      } else {
+        bidRejected++
+        aStat.rejected++
+        const r = body.message || '?'
+        const code = body.data?.rejectCode || 'UNKNOWN'
+        rejectReasons[r] = (rejectReasons[r] || 0) + 1
+        rejectByCode[code] = (rejectByCode[code] || 0) + 1
+      }
     } else if (res.status === 409) {
       http4xx++; bidRejected++
-      try { const b = await res.json(); const r = b.message || '409'; rejectReasons[r] = (rejectReasons[r] || 0) + 1 } catch (_) {}
+      aStat.rejected++
+      try {
+        const b = await res.json()
+        const r = b.message || '409'
+        const code = b.data?.rejectCode || 'UNKNOWN'
+        rejectReasons[r] = (rejectReasons[r] || 0) + 1
+        rejectByCode[code] = (rejectByCode[code] || 0) + 1
+        if (code === 'OPTIMISTIC_LOCK') aStat.conflicts++
+      } catch (_) {
+        rejectByCode.UNKNOWN++
+      }
     } else if (res.status >= 500) {
       http5xx++; bidSystemError++
-    } else { http4xx++; bidRejected++ }
+    } else {
+      http4xx++; bidRejected++
+      aStat.rejected++
+    }
   }
 
   async function worker(i) {
@@ -259,8 +310,9 @@ async function main() {
     lastTime = now; lastCount = httpTotal
     const tb = bidAccepted + bidRejected
     const ar = tb > 0 ? (bidAccepted / tb * 100).toFixed(1) : '0'
+    const wsAvg = wsLatencies.length > 0 ? Math.round(wsLatencies.reduce((a, b) => a + b, 0) / wsLatencies.length) : 0
     process.stderr.write(
-      `\r  [${elapsed}s] HTTP:${httpTotal} QPS:${avgQps}(瞬${instantQps}) | WS:${wsConnected}连/${wsMsgReceived}msg | 2xx:${httpTotal>0?(http2xx/httpTotal*100).toFixed(1):'0'}% | 出价成功:${bidAccepted} acc:${ar}%`,
+      `\r  [${elapsed}s] HTTP:${httpTotal} QPS:${avgQps}(瞬${instantQps}) | WS:${wsConnected}连/${wsMsgReceived}msg 延迟avg:${wsAvg}ms | 2xx:${httpTotal>0?(http2xx/httpTotal*100).toFixed(1):'0'}% | 出价成功:${bidAccepted} acc:${ar}%`,
     )
   }, 1000)
 
@@ -306,7 +358,26 @@ async function main() {
       total: totalBids, accepted: bidAccepted, accepted_per_sec: (bidAccepted / (totalMs / 1000)).toFixed(1),
       rejected: bidRejected, business_accept_rate: totalBids > 0 ? (bidAccepted / totalBids * 100).toFixed(1) + '%' : '0%',
       system_error: bidSystemError,
+      reject_breakdown: rejectByCode,
       top_reject_reasons: Object.entries(rejectReasons).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ reason: k, count: v })),
+    },
+    auction_distribution: {
+      total_auctions: auctionStats.size,
+      requests_per_auction: (() => {
+        const arr = Array.from(auctionStats.values()).map(s => s.requests)
+        arr.sort((a, b) => a - b)
+        return { min: arr[0] || 0, p50: arr[Math.floor(arr.length * 0.5)] || 0, p95: arr[Math.floor(arr.length * 0.95)] || 0, max: arr[arr.length - 1] || 0, avg: arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0 }
+      })(),
+      accepted_per_auction: (() => {
+        const arr = Array.from(auctionStats.values()).map(s => s.accepted)
+        arr.sort((a, b) => a - b)
+        return { min: arr[0] || 0, p50: arr[Math.floor(arr.length * 0.5)] || 0, p95: arr[Math.floor(arr.length * 0.95)] || 0, max: arr[arr.length - 1] || 0, avg: arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0 }
+      })(),
+      conflicts_per_auction: (() => {
+        const arr = Array.from(auctionStats.values()).map(s => s.conflicts)
+        arr.sort((a, b) => a - b)
+        return { min: arr[0] || 0, p50: arr[Math.floor(arr.length * 0.5)] || 0, p95: arr[Math.floor(arr.length * 0.95)] || 0, max: arr[arr.length - 1] || 0, avg: arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0 }
+      })(),
     },
     latency: {
       avg: latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0,
@@ -321,6 +392,7 @@ async function main() {
       disconnected: wsDisconnected,
       connect_rate: USERS > 0 ? (wsConnected / USERS * 100).toFixed(1) + '%' : '0%',
       messages_received: wsMsgReceived,
+      missing_timestamp: wsMissingTimestamp,
       broadcast_latency: {
         avg: wsLatencies.length > 0 ? Math.round(wsLatencies.reduce((a, b) => a + b, 0) / wsLatencies.length) : 0,
         p50: wsLatencies.length > 0 ? wsLatencies[Math.floor(wsLatencies.length * 0.5)] : 0,

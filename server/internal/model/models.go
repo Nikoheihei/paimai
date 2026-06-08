@@ -30,6 +30,7 @@ type Product struct {
 	Name        string    `gorm:"size:255;not null" json:"name"`
 	ImageURL    string    `gorm:"size:512" json:"imageUrl"`
 	Description string    `gorm:"type:text" json:"description"`
+	Status      string    `gorm:"type:enum('available','locked','offline');default:'available';not null;index" json:"status"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -48,7 +49,7 @@ type Auction struct {
 	EndAt              time.Time `gorm:"index:idx_status_end_at" json:"endAt"`
 	ExtendThresholdSec int       `gorm:"not null;default:0" json:"extendThresholdSec"`
 	ExtendDurationSec  int       `gorm:"not null;default:0" json:"extendDurationSec"`
-	Status             string    `gorm:"type:enum('draft','scheduled','running','sold','failed','cancelled');default:'draft';not null;index:idx_room_status;index:idx_status_end_at" json:"status"`
+	Status             string    `gorm:"type:enum('draft','scheduled','running','sold','failed','cancelled','payment_timeout');default:'draft';not null;index:idx_room_status;index:idx_status_end_at" json:"status"`
 	WinnerUserID       *uint64   `gorm:"index;default:null" json:"winnerUserId"`
 	Version            int32     `gorm:"not null;default:1" json:"version"` // 乐观锁版本号
 	CancelReason       string    `gorm:"size:255" json:"cancelReason"`

@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -115,6 +116,13 @@ func (w *mockStateWriter) ZAdd(ctx context.Context, key string, members ...gored
 
 func (w *mockStateWriter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.StatusCmd {
 	return goredis.NewStatusCmd(ctx)
+}
+func (w *mockStateWriter) Exec(ctx context.Context) error {
+	if w.failNext {
+		w.failNext = false
+		return fmt.Errorf("mock exec fail")
+	}
+	return nil
 }
 
 // ======================== Tests ========================

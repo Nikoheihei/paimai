@@ -508,11 +508,25 @@ html, body {
 .ranking-item:nth-child(2) .rank-num { color: #c0c0c0; }
 .ranking-item:nth-child(3) .rank-num { color: #cd7f32; }
 .ranking-user { flex: 1; min-width: 0; overflow: hidden; }
+.ranking-user-line {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
 .ranking-user-name {
   font-size: 14px; font-weight: 600; color: var(--text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ranking-item.me .ranking-user-name { color: var(--primary); }
+.ranking-paid-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(37,199,120,.16);
+  border: 1px solid rgba(37,199,120,.32);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+}
 .ranking-amount {
   font-size: 15px; font-weight: 800; color: var(--primary); font-style: italic;
   white-space: nowrap; flex-shrink: 0;
@@ -633,9 +647,10 @@ html, body {
 .bt-icon-btn {
   width: 40px; height: 40px; border-radius: 50%;
   background: rgba(255,255,255,.08); border: none;
-  color: var(--text-secondary); font-size: 18px;
+  color: var(--text-secondary); font-size: 12px; font-weight: 700;
   cursor: pointer; display: flex; align-items: center;
   justify-content: center; flex-shrink: 0;
+  letter-spacing: 0; white-space: nowrap;
   transition: all .15s; position: relative;
 }
 .bt-icon-btn:active { transform: scale(.9); background: rgba(255,255,255,.15); }
@@ -643,9 +658,10 @@ html, body {
 .bt-cart-btn {
   width: 40px; height: 40px; border-radius: 50%;
   background: var(--primary-grad); border: none;
-  color: #fff; font-size: 18px;
+  color: #fff; font-size: 11px; font-weight: 800;
   cursor: pointer; display: flex; align-items: center;
   justify-content: center; flex-shrink: 0;
+  padding: 0 4px; line-height: 1.08; letter-spacing: 0; text-align: center;
   box-shadow: 0 2px 12px rgba(254,44,55,.35);
   transition: transform .15s;
 }
@@ -1103,6 +1119,17 @@ html, body {
 .history-item.is-me { border-left: 3px solid var(--primary); background: rgba(254,44,85,.06); }
 .history-rank { font-size: 12px; color: var(--text-muted); width: 28px; }
 .history-user { flex: 1; }
+.history-paid-badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(37,199,120,.16);
+  border: 1px solid rgba(37,199,120,.32);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 .history-amount { font-weight: 700; color: var(--primary); }
 
 .detail-bid-bar {

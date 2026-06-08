@@ -54,10 +54,15 @@ export default function OrderPage() {
 
   // 监听订单刷新事件（竞拍成交后自动刷新）
   useEffect(() => {
-    const handler = () => { load() }
+    const handler = () => {
+      load()
+      if (selected?.id) {
+        getBuyerOrder(selected.id).then(setSelected).catch(() => {})
+      }
+    }
     window.addEventListener('order:refresh', handler)
     return () => window.removeEventListener('order:refresh', handler)
-  }, [])
+  }, [selected?.id])
 
   const filtered = activeTab === 'all' ? orders : orders.filter(o => o.status === activeTab)
 

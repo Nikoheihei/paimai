@@ -21,6 +21,7 @@ type RedisStateWriter interface {
 	Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd
 	ZAdd(ctx context.Context, key string, members ...goredis.Z) *goredis.IntCmd
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.StatusCmd
+	Exec(ctx context.Context) error
 }
 
 // RedisStreamClient 是 Consumer 依赖的 Redis 操作接口，用于测试 mock。
@@ -91,6 +92,10 @@ func (w *goredisStateWriter) ZAdd(ctx context.Context, key string, members ...go
 }
 func (w *goredisStateWriter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *goredis.StatusCmd {
 	return w.pipe.Set(ctx, key, value, expiration)
+}
+func (w *goredisStateWriter) Exec(ctx context.Context) error {
+	_, err := w.pipe.Exec(ctx)
+	return err
 }
 
 // goredisClientAdapter 包装 *goredis.Client 使其满足 RedisStreamClient 接口。
@@ -219,11 +224,11 @@ func (c *Consumer) processMessage(ctx context.Context, message goredis.XMessage)
 	switch evt.Type {
 	case "bid.accepted":
 		c.handleBidAccepted(ctx, &evt, message.ID)
-	case "order.created":
-		c.handleOrderCreated(ctx, &evt, message.ID)
-	case "product.created":
+	case "order.created", "order.paid", "order.closed":
+		c.handleOrderChanged(ctx, &evt, message.ID)
+	case "product.created", "product.offline":
 		c.handleProductCreated(ctx, &evt, message.ID)
-	case "auction.created", "auction.updated":
+	case "auction.created", "auction.updated", "auction.payment_timeout":
 		// 竞拍列表变化只需要广播给客户端，前端收到后重新拉取权威列表。
 	default:
 		log.Printf("[stream] 未知事件类型: %s", evt.Type)
@@ -290,18 +295,23 @@ func (c *Consumer) handleBidAccepted(ctx context.Context, evt *Event, messageID 
 	lastTsKey := fmt.Sprintf("auction:%d:last_bid_ts:%d", auctionID, userID)
 	writer.Set(ctx, lastTsKey, time.Now().UnixMilli(), 86400*time.Second)
 
+	// 执行 Pipeline，真正写入 Redis
+	if err := writer.Exec(ctx); err != nil {
+		log.Printf("[stream] handleBidAccepted Pipeline 执行失败: %v", err)
+	}
+
 	// sold 状态已在 Pipeline 的 HSET 中设置（payload.status 为 "sold"），无需重复写入
 }
 
-// handleOrderCreated 处理订单创建事件：通过 WS 推送通知用户和商家刷新订单。
-func (c *Consumer) handleOrderCreated(ctx context.Context, evt *Event, messageID string) {
+// handleOrderChanged 处理订单事件：通过 WS 推送通知用户和商家刷新订单/排行榜。
+func (c *Consumer) handleOrderChanged(ctx context.Context, evt *Event, messageID string) {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
-		log.Printf("[stream] 解析 order.created payload 失败: %v", err)
+		log.Printf("[stream] 解析 %s payload 失败: %v", evt.Type, err)
 		return
 	}
-	// 订单创建事件不需要写入 Redis，只需通过 WS 广播即可
-	// 前端收到后会自动刷新订单列表
+	// 订单事件不需要写入 Redis，只需通过 WS 广播即可
+	// 前端收到后会自动刷新订单列表和支付状态
 	_ = payload
 }
 

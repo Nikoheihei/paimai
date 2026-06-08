@@ -44,6 +44,23 @@ func InitDB(dsn string) (*gorm.DB, error) {
 		return nil, err
 	}
 
+	if err := migrateCompatibility(db); err != nil {
+		return nil, err
+	}
+
 	log.Println("Database migration completed successfully.")
 	return db, nil
+}
+
+func migrateCompatibility(db *gorm.DB) error {
+	if err := db.Exec("ALTER TABLE auctions MODIFY COLUMN status ENUM('draft','scheduled','running','sold','failed','cancelled','payment_timeout') NOT NULL DEFAULT 'draft'").Error; err != nil {
+		return err
+	}
+	if err := db.Exec("ALTER TABLE products MODIFY COLUMN status ENUM('available','locked','offline') NOT NULL DEFAULT 'available'").Error; err != nil {
+		return err
+	}
+	if err := db.Exec("UPDATE products SET status = 'available' WHERE status IS NULL OR status = ''").Error; err != nil {
+		return err
+	}
+	return nil
 }

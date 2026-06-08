@@ -33,7 +33,15 @@ type Props = {
   onBack: () => void
 }
 
-const AUCTION_REFRESH_EVENTS = new Set(['product.created', 'auction.created', 'auction.updated'])
+const AUCTION_REFRESH_EVENTS = new Set([
+  'product.created',
+  'product.offline',
+  'auction.created',
+  'auction.updated',
+  'auction.payment_timeout',
+  'order.paid',
+  'order.closed',
+])
 
 function parseUserIdFromToken(): number {
   const token = getToken()
@@ -42,6 +50,16 @@ function parseUserIdFromToken(): number {
     const payload = JSON.parse(atob(token.split('.')[1]))
     return payload.userId || 0
   } catch { return 0 }
+}
+
+function wsEventAuctionId(message: WsMessage): number | undefined {
+  const data = message.data as { auctionId?: number; payload?: { auctionId?: number } } | undefined
+  return data?.auctionId ?? data?.payload?.auctionId
+}
+
+function wsEventBuyerId(message: WsMessage): number | undefined {
+  const data = message.data as { buyerId?: number; payload?: { buyerId?: number } } | undefined
+  return data?.buyerId ?? data?.payload?.buyerId
 }
 
 export default function LiveRoomPage({ roomId, onBack }: Props) {
@@ -87,6 +105,15 @@ export default function LiveRoomPage({ roomId, onBack }: Props) {
       // 收到商品/竞拍变更事件，刷新竞拍列表
       if (AUCTION_REFRESH_EVENTS.has(msg.type)) {
         loadRoomAuctions()
+      }
+      if (msg.type === 'order.paid' || msg.type === 'order.closed') {
+        window.dispatchEvent(new CustomEvent('order:refresh'))
+      }
+      if (msg.type === 'order.paid') {
+        const paidAuctionId = wsEventAuctionId(msg)
+        if (paidAuctionId && wsEventBuyerId(msg) === userId) {
+          handlePaid(paidAuctionId)
+        }
       }
     },
     onConnected: () => console.log('[WS] 已连接'),

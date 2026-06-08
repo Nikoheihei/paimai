@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-07T16:51:31.796Z",
+  "timestamp": "2026-06-07T17:00:45.718Z",
   "config": {
     "rooms": 1,
     "auctionsPerRoom": 1,
@@ -8,89 +8,89 @@
     "durationSec": 20
   },
   "http": {
-    "total": 58514,
-    "2xx_rate": "51.6%",
-    "4xx_rate": "48.4%",
+    "total": 52180,
+    "2xx_rate": "50.9%",
+    "4xx_rate": "49.1%",
     "system_error_rate": "0.00%",
-    "avgQps": 2850,
-    "durationMs": 20534
+    "avgQps": 2545,
+    "durationMs": 20499
   },
   "bid": {
-    "total": 29257,
-    "accepted": 908,
-    "accepted_per_sec": "44.2",
-    "rejected": 28349,
-    "business_accept_rate": "3.1%",
+    "total": 26090,
+    "accepted": 444,
+    "accepted_per_sec": "21.7",
+    "rejected": 25646,
+    "business_accept_rate": "1.7%",
     "system_error": 0,
     "top_reject_reasons": [
       {
         "reason": "出价冲突，请重试",
-        "count": 26128
+        "count": 23622
       },
       {
         "reason": "出价被拒绝",
-        "count": 2221
+        "count": 2024
       }
     ]
   },
   "http_latency": {
-    "avg": 39,
-    "p50": 35,
-    "p95": 82,
-    "p99": 111,
-    "max": 210
+    "avg": 72,
+    "p50": 61,
+    "p95": 159,
+    "p99": 297,
+    "max": 541
   },
   "ws": {
     "connected": 500,
     "errors": 0,
-    "total_messages": 454496,
+    "total_messages": 223756,
     "msgs_per_client_avg": 0,
     "msgs_per_client_min": 0,
     "msgs_per_client_max": 0,
     "latency": {
-      "avg": 5,
-      "p50": 5,
-      "p95": 9,
-      "p99": 11,
-      "max": 92
+      "avg": 6,
+      "p50": 6,
+      "p95": 11,
+      "p99": 20,
+      "max": 177
     }
   },
   "ws_server": {
-    "broadcast_cost_p50": 0.332291,
-    "broadcast_cost_p95": 2.64125,
-    "broadcast_cost_p99": 5.311166,
-    "broadcast_count": 3925,
-    "broadcast_msgs": 454496,
-    "broadcast_wait_p50": 0.000083,
-    "broadcast_wait_p95": 0.000125,
-    "broadcast_wait_p99": 0.000126,
+    "broadcast_cost_p50": 0.480208,
+    "broadcast_cost_p95": 4.846458,
+    "broadcast_cost_p99": 9.518417,
+    "broadcast_count": 681,
+    "broadcast_msgs": 339258,
+    "broadcast_wait_p50": 0.000084,
+    "broadcast_wait_p95": 0.000126,
+    "broadcast_wait_p99": 0.000167,
     "connections": 500,
     "event_queue_len": 0,
-    "marshal_count": 3927,
-    "marshal_total_ms": 5,
+    "marshal_count": 683,
+    "marshal_total_ms": 0,
     "rooms": 1,
     "send_channel_full": 0,
     "slow_broadcasts": 0,
     "slow_clients_dropped": 0,
-    "write_cost_p50": 0.007208,
-    "write_cost_p95": 0.028583,
-    "write_cost_p99": 0.483166,
-    "write_loop_p50": 0.007583,
-    "write_loop_p95": 0.0295,
-    "write_loop_p99": 0.509417,
-    "write_pump_count": 454496,
-    "write_pump_msg_count": 454496,
-    "write_pump_total_ms": 2610
+    "write_cost_p50": 0.005583,
+    "write_cost_p95": 0.018417,
+    "write_cost_p99": 0.118708,
+    "write_loop_p50": 0.005875,
+    "write_loop_p95": 0.019083,
+    "write_loop_p99": 0.126167,
+    "write_pump_count": 339605,
+    "write_pump_msg_count": 339605,
+    "write_pump_total_ms": 2891
   },
   "infrastructure": {
     "mysql": {
-      "questions": 23164442,
+      "questions": 23414315,
       "threads": 51,
       "slow": 3
     },
     "redis": {
-      "total_commands_processed": "97185258",
-      "instantaneous_ops_per_sec": "8855",
+      "total_commands_processed": "97592342",
+      "instantaneous_ops_per_sec": "8746",
       "rejected_connections": "0"
     }
   }

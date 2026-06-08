@@ -2,7 +2,7 @@ const BASE = '/api'
 const TOKEN_KEY = 'paimai_admin_token'
 
 type ApiEnvelope<T> = {
-  code: number
+  code: number | string
   message?: string
   data: T
 }
@@ -97,7 +97,7 @@ export async function closeRoom(id: number): Promise<CloseRoomResult> {
   return apiFetch(`/admin/rooms/${id}/close`, { method: 'POST' })
 }
 
-export type Product = { id: number; sellerId: number; name: string; imageUrl: string; description: string; createdAt: string }
+export type Product = { id: number; sellerId: number; name: string; imageUrl: string; description: string; status?: 'available' | 'locked' | 'offline'; createdAt: string }
 export async function createProduct(name: string, imageUrl?: string, description?: string): Promise<Product> {
   return apiFetch('/admin/products', { method: 'POST', body: JSON.stringify({ sellerId: 0, name, imageUrl: imageUrl || '', description: description || '' }) })
 }
@@ -110,6 +110,9 @@ export async function updateProduct(id: number, name: string, imageUrl?: string,
 export async function deleteProduct(id: number): Promise<void> {
   return apiFetch(`/admin/products/${id}`, { method: 'DELETE' })
 }
+export async function offlineProduct(id: number): Promise<Product> {
+  return apiFetch(`/admin/products/${id}/offline`, { method: 'POST' })
+}
 export async function listAuctionBids(auctionId: number): Promise<{ id: number; auctionId: number; userId: number; amountCents: number; accepted: boolean; createdAt: string }[]> {
   return apiFetch(`/admin/auctions/${auctionId}/bids`)
 }
@@ -118,6 +121,46 @@ export async function getRoomStats(roomId: number): Promise<{ roomId: number; on
 }
 
 export type Auction = { id: number; roomId: number; productId: number; mode: string; startPriceCents: number; currentPriceCents: number; bidIncrementCents: number; capPriceCents: number; reservePriceCents: number | null; extendThresholdSec?: number; extendDurationSec?: number; startAt: string; endAt: string; status: string; winnerUserId: number | null }
+type AuctionPayload = {
+  roomId: number
+  productId: number
+  mode: string
+  startPriceCents: number
+  bidIncrementCents: number
+  capPriceCents: number
+  reservePriceCents: number | null
+  extendThresholdSec: number
+  extendDurationSec: number
+  startAt: string | null
+  endAt: string | null
+}
+function makeAuctionPayload(
+  roomId: number,
+  productId: number,
+  mode: string,
+  startPriceCents: number,
+  bidIncrementCents: number,
+  capPriceCents: number,
+  reservePriceCents?: number | null,
+  extendThresholdSec?: number,
+  extendDurationSec?: number,
+  startAt?: string,
+  endAt?: string,
+): AuctionPayload {
+  return {
+    roomId,
+    productId,
+    mode,
+    startPriceCents,
+    bidIncrementCents,
+    capPriceCents,
+    reservePriceCents: reservePriceCents ?? null,
+    extendThresholdSec: extendThresholdSec || 0,
+    extendDurationSec: extendDurationSec || 0,
+    startAt: startAt || null,
+    endAt: endAt || null,
+  }
+}
 export async function createAuction(
   roomId: number,
   productId: number,
@@ -133,19 +176,25 @@ export async function createAuction(
 ): Promise<Auction> {
   return apiFetch('/admin/auctions', {
     method: 'POST',
-    body: JSON.stringify({
-      roomId,
-      productId,
-      mode,
-      startPriceCents,
-      bidIncrementCents,
-      capPriceCents,
-      reservePriceCents: reservePriceCents ?? null,
-      extendThresholdSec: extendThresholdSec || 0,
-      extendDurationSec: extendDurationSec || 0,
-      startAt: startAt || null,
-      endAt: endAt || null,
-    }),
+    body: JSON.stringify(makeAuctionPayload(roomId, productId, mode, startPriceCents, bidIncrementCents, capPriceCents, reservePriceCents, extendThresholdSec, extendDurationSec, startAt, endAt)),
+  })
+}
+export async function relistProduct(
+  productId: number,
+  roomId: number,
+  mode: string,
+  startPriceCents: number,
+  bidIncrementCents: number,
+  capPriceCents: number,
+  reservePriceCents?: number | null,
+  extendThresholdSec?: number,
+  extendDurationSec?: number,
+  startAt?: string,
+  endAt?: string,
+): Promise<Auction> {
+  return apiFetch(`/admin/products/${productId}/relist`, {
+    method: 'POST',
+    body: JSON.stringify(makeAuctionPayload(roomId, productId, mode, startPriceCents, bidIncrementCents, capPriceCents, reservePriceCents, extendThresholdSec, extendDurationSec, startAt, endAt)),
   })
 }
 export async function listAuctions(roomId?: number, status?: string): Promise<Auction[]> {
@@ -182,7 +231,7 @@ export async function settleAuction(id: number): Promise<any> {
   return apiFetch(`/admin/auctions/${id}/settle`, { method: 'POST' })
 }
 
-export type Order = { id: number; auctionId: number; productId: number; buyerId: number; sellerId: number; finalPriceCents: number; status: string; createdAt: string; paidAt: string | null }
+export type Order = { id: number; auctionId: number; productId: number; buyerId: number; sellerId: number; finalPriceCents: number; status: string; addressId?: number | null; addressSnapshot?: string; createdAt: string; paidAt: string | null }
 export async function listOrders(): Promise<Order[]> {
   return apiFetch('/admin/orders')
 }

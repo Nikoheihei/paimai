@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listProducts, createProduct, deleteProduct, type Product } from '../api/client'
+import { listProducts, createProduct, deleteProduct, offlineProduct, type Product } from '../api/client'
 import ImageUploader from '../components/ImageUploader'
 
 export default function ProductListPage() {
@@ -17,6 +17,10 @@ export default function ProductListPage() {
 
   const load = () => { listProducts().then(setProducts).catch(() => {}) }
   useEffect(load, [])
+  useEffect(() => {
+    const timer = window.setInterval(load, 10000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const resetForm = () => { setName(''); setDesc(''); setImageUrl(''); setEditing(null) }
 
@@ -31,6 +35,11 @@ export default function ProductListPage() {
   const handleDelete = async (id: number) => {
     if (!confirm('确定删除该商品？')) return
     try { await deleteProduct(id); setMsg('商品已删除'); load() } catch (err: any) { setMsg(err.message) }
+  }
+
+  const handleOffline = async (id: number) => {
+    if (!confirm('确定下架该商品？下架后不会继续参与竞拍。')) return
+    try { await offlineProduct(id); setMsg('商品已下架'); load() } catch (err: any) { setMsg(err.message) }
   }
 
   const handleBatchDelete = async () => {
@@ -111,6 +120,7 @@ export default function ProductListPage() {
               <th>缩略图</th>
               <th>名称</th>
               <th>描述</th>
+              <th>状态</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -126,9 +136,11 @@ export default function ProductListPage() {
                 </td>
                 <td><strong>{p.name}</strong><br /><span className="meta">ID: #{p.id}</span></td>
                 <td className="desc-cell">{p.description || '-'}</td>
+                <td>{productStatusBadge(p.status)}</td>
                 <td>{new Date(p.createdAt).toLocaleDateString('zh-CN')}</td>
                 <td>
                   <div className="action-cell">
+                    {p.status !== 'offline' && <button className="admin-btn small" onClick={() => handleOffline(p.id)}>下架</button>}
                     <button className="admin-btn small danger" onClick={() => handleDelete(p.id)}>删除</button>
                   </div>
                 </td>
@@ -145,4 +157,14 @@ export default function ProductListPage() {
       )}
     </div>
   )
+}
+
+function productStatusBadge(status?: Product['status']) {
+  const map: Record<string, { text: string; cls: string }> = {
+    available: { text: '可上架', cls: 'badge-green' },
+    locked: { text: '已占用', cls: 'badge-blue' },
+    offline: { text: '已下架', cls: 'badge-gray' },
+  }
+  const info = map[status || 'available'] || { text: status || '可上架', cls: 'badge-gray' }
+  return <span className={`status-badge ${info.cls}`}>{info.text}</span>
 }

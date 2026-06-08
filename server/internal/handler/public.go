@@ -110,12 +110,12 @@ func (h *PublicHandler) placeBid(c *gin.Context) {
 	}
 	result, err := h.service.PlaceBid(c.Request.Context(), id, input)
 	if reject, ok := err.(*service.BidRejectError); ok {
-		response.Error(c, http.StatusConflict, 409, reject.Message)
+		response.ErrorWithData(c, http.StatusConflict, 409, reject.Message, map[string]string{"rejectCode": reject.Code})
 		return
 	}
 	// 乐观锁冲突也返回 409，而非 500
 	if err != nil && strings.Contains(err.Error(), "version conflict") {
-		response.Error(c, http.StatusConflict, 409, "出价冲突，请重试")
+		response.ErrorWithData(c, http.StatusConflict, 409, "出价冲突，请重试", map[string]string{"rejectCode": "OPTIMISTIC_LOCK"})
 		return
 	}
 	writeResult(c, result, err)

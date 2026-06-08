@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
-
 
 	"paimai/internal/model"
 	"paimai/internal/statemachine"
@@ -177,6 +177,48 @@ func TestPayOrder(t *testing.T) {
 	}
 }
 
+// TestPayOrderPublishesPaidEvent 验证支付成功后会发出实时刷新事件。
+func TestPayOrderPublishesPaidEvent(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	buyerID := uint64(42)
+	auctionID := seedRunningAuction(store, &buyerID, nil)
+	order := &model.Order{
+		AuctionID:       auctionID,
+		ProductID:       1,
+		BuyerID:         buyerID,
+		SellerID:        100,
+		FinalPriceCents: 5000,
+		Status:          "pending_payment",
+		CreatedAt:       time.Date(2026, 6, 2, 11, 58, 0, 0, time.UTC),
+	}
+	_ = store.CreateOrder(context.Background(), order)
+
+	_, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
+	if err != nil {
+		t.Fatalf("pay failed: %v", err)
+	}
+	if len(store.outboxEvents) != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", len(store.outboxEvents))
+	}
+	evt := store.outboxEvents[0]
+	if evt.EventType != "order.paid" {
+		t.Fatalf("expected order.paid event, got %s", evt.EventType)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+		t.Fatalf("invalid event payload: %v", err)
+	}
+	if payload["type"] != "order.paid" {
+		t.Fatalf("expected payload type order.paid, got %v", payload["type"])
+	}
+	if got := uint64(payload["auctionId"].(float64)); got != auctionID {
+		t.Fatalf("expected auctionId=%d, got %d", auctionID, got)
+	}
+	if got := uint64(payload["buyerId"].(float64)); got != buyerID {
+		t.Fatalf("expected buyerId=%d, got %d", buyerID, got)
+	}
+}
+
 // TestPayOrderAlreadyPaid 验证已支付的订单幂等返回成功。
 func TestPayOrderAlreadyPaid(t *testing.T) {
 	svc, store := newSettleTestHarness()
@@ -200,8 +242,109 @@ func TestPayOrderClosed(t *testing.T) {
 	order := seedOrder(store, "closed")
 
 	_, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("expected ErrInvalidTransition, got %v", err)
+	if !errors.Is(err, ErrOrderPaymentTimeout) {
+		t.Fatalf("expected ErrOrderPaymentTimeout, got %v", err)
+	}
+}
+
+// TestPayOrderExpiredClosesOrder 验证超时订单无法支付，并在事务内关闭订单、释放商品和标记竞拍支付超时。
+func TestPayOrderExpiredClosesOrder(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	order := seedOrder(store, "pending_payment")
+	order.CreatedAt = svc.now().Add(-PaymentWindow - time.Second)
+	_ = store.UpdateOrder(context.Background(), order)
+
+	_, err := svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
+	if !errors.Is(err, ErrOrderPaymentTimeout) {
+		t.Fatalf("expected ErrOrderPaymentTimeout, got %v", err)
+	}
+
+	closed, _ := store.GetOrder(context.Background(), order.ID)
+	if closed.Status != "closed" {
+		t.Fatalf("expected order closed, got %s", closed.Status)
+	}
+	auction, _ := store.GetAuction(context.Background(), order.AuctionID)
+	if auction.Status != string(statemachine.StatePaymentTimeout) {
+		t.Fatalf("expected auction payment_timeout, got %s", auction.Status)
+	}
+	product, _ := store.GetProduct(context.Background(), order.ProductID)
+	if product.Status != ProductStatusAvailable {
+		t.Fatalf("expected product available, got %s", product.Status)
+	}
+	if !hasOutboxEvent(store, "order.closed") {
+		t.Fatal("expected order.closed outbox event")
+	}
+	if !hasOutboxEvent(store, "auction.payment_timeout") {
+		t.Fatal("expected auction.payment_timeout outbox event")
+	}
+}
+
+// TestCloseExpiredPaymentOrders 验证后台任务会关闭超时待支付订单。
+func TestCloseExpiredPaymentOrders(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	order := seedOrder(store, "pending_payment")
+	order.CreatedAt = svc.now().Add(-PaymentWindow - time.Second)
+	_ = store.UpdateOrder(context.Background(), order)
+
+	count, err := svc.CloseExpiredPaymentOrders(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("CloseExpiredPaymentOrders() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 closed order, got %d", count)
+	}
+	count, err = svc.CloseExpiredPaymentOrders(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("second CloseExpiredPaymentOrders() error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected idempotent second close count 0, got %d", count)
+	}
+	if got := countOutboxEvents(store, "order.closed"); got != 1 {
+		t.Fatalf("expected exactly one order.closed event, got %d", got)
+	}
+}
+
+// TestCloseExpiredPaymentOrdersSkipsPaid 验证已支付订单不会被后台关单。
+func TestCloseExpiredPaymentOrdersSkipsPaid(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	order := seedOrder(store, "paid")
+	order.CreatedAt = svc.now().Add(-PaymentWindow - time.Minute)
+	_ = store.UpdateOrder(context.Background(), order)
+
+	count, err := svc.CloseExpiredPaymentOrders(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("CloseExpiredPaymentOrders() error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no paid orders closed, got %d", count)
+	}
+	refreshed, _ := store.GetOrder(context.Background(), order.ID)
+	if refreshed.Status != "paid" {
+		t.Fatalf("expected paid order to remain paid, got %s", refreshed.Status)
+	}
+}
+
+// TestPayAfterTimeoutCloseFails 验证关单和支付的状态条件只能让其中一个路径成功。
+func TestPayAfterTimeoutCloseFails(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	order := seedOrder(store, "pending_payment")
+	order.CreatedAt = svc.now().Add(-PaymentWindow - time.Second)
+	_ = store.UpdateOrder(context.Background(), order)
+
+	count, err := svc.CloseExpiredPaymentOrders(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("CloseExpiredPaymentOrders() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected close path to win once, got %d", count)
+	}
+	_, err = svc.PayOrder(context.Background(), order.ID, PayOrderInput{})
+	if !errors.Is(err, ErrOrderPaymentTimeout) {
+		t.Fatalf("expected payment to fail after close, got %v", err)
+	}
+	if got := countOutboxEvents(store, "order.closed"); got != 1 {
+		t.Fatalf("expected one order.closed event, got %d", got)
 	}
 }
 
@@ -286,6 +429,7 @@ func newSettleTestHarness() (*SettleService, *adminStoreStub) {
 // seedRunningAuction 在内存仓储中插入一个 running 状态的竞拍。
 func seedRunningAuction(store *adminStoreStub, winnerUserID *uint64, reservePrice *int64) uint64 {
 	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	ensureProduct(store, 1, ProductStatusLocked)
 	// 确保 Room 1 存在（SettleAuction 需要查 Room 获取 SellerID）
 	if _, err := store.GetRoom(context.Background(), 1); err != nil {
 		_ = store.CreateRoom(context.Background(), &model.LiveRoom{
@@ -297,7 +441,7 @@ func seedRunningAuction(store *adminStoreStub, winnerUserID *uint64, reservePric
 		ProductID:         1,
 		Mode:              "sudden_death",
 		Status:            string(statemachine.StateRunning),
-		StartPriceCents:    0,
+		StartPriceCents:   0,
 		CurrentPriceCents: 1000,
 		BidIncrementCents: 100,
 		CapPriceCents:     10000,
@@ -312,6 +456,30 @@ func seedRunningAuction(store *adminStoreStub, winnerUserID *uint64, reservePric
 
 // seedOrder 在内存仓储中插入一笔订单，用于支付相关测试。
 func seedOrder(store *adminStoreStub, status string) *model.Order {
+	ensureProduct(store, 1, ProductStatusLocked)
+	if _, err := store.GetRoom(context.Background(), 1); err != nil {
+		_ = store.CreateRoom(context.Background(), &model.LiveRoom{
+			ID: 1, SellerID: 100, Title: "测试直播间", Status: "live",
+		})
+	}
+	if _, err := store.GetAuction(context.Background(), 1); err != nil {
+		winner := uint64(42)
+		store.auctions[1] = &model.Auction{
+			ID:                1,
+			RoomID:            1,
+			ProductID:         1,
+			Mode:              "sudden_death",
+			Status:            string(statemachine.StateSold),
+			StartPriceCents:   1000,
+			CurrentPriceCents: 5000,
+			BidIncrementCents: 100,
+			CapPriceCents:     10000,
+			WinnerUserID:      &winner,
+			StartAt:           time.Date(2026, 6, 2, 11, 50, 0, 0, time.UTC),
+			EndAt:             time.Date(2026, 6, 2, 11, 55, 0, 0, time.UTC),
+		}
+		store.nextAuctionID = 2
+	}
 	order := &model.Order{
 		AuctionID:       1,
 		ProductID:       1,
@@ -319,7 +487,38 @@ func seedOrder(store *adminStoreStub, status string) *model.Order {
 		SellerID:        1,
 		FinalPriceCents: 5000,
 		Status:          status,
+		CreatedAt:       time.Date(2026, 6, 2, 11, 58, 0, 0, time.UTC),
 	}
 	_ = store.CreateOrder(context.Background(), order)
 	return order
+}
+
+func ensureProduct(store *adminStoreStub, id uint64, status string) {
+	if _, ok := store.products[id]; ok {
+		store.products[id].Status = status
+		return
+	}
+	store.products[id] = &model.Product{
+		ID:       id,
+		SellerID: 100,
+		Name:     "测试商品",
+		Status:   status,
+	}
+	if store.nextProductID <= id {
+		store.nextProductID = id + 1
+	}
+}
+
+func hasOutboxEvent(store *adminStoreStub, eventType string) bool {
+	return countOutboxEvents(store, eventType) > 0
+}
+
+func countOutboxEvents(store *adminStoreStub, eventType string) int {
+	count := 0
+	for _, evt := range store.outboxEvents {
+		if evt.EventType == eventType {
+			count++
+		}
+	}
+	return count
 }

@@ -90,6 +90,9 @@ func (s *mockAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) e
 }
 
 func (s *mockAdminStore) UpdateProduct(_ context.Context, product *model.Product) error { return nil }
+func (s *mockAdminStore) UpdateProductStatus(_ context.Context, id uint64, status string) error {
+	return nil
+}
 func (s *mockAdminStore) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	return nil, nil
 }
@@ -140,6 +143,9 @@ func (s *mockAdminStore) ListOrdersByBuyer(ctx context.Context, buyerID uint64) 
 }
 func (s *mockAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, status string, paidAt *time.Time, addressID *uint64, addressSnapshot string) error {
 	return nil
+}
+func (s *mockAdminStore) ListExpiredPendingOrders(ctx context.Context, before time.Time, limit int) ([]model.Order, error) {
+	return nil, nil
 }
 func (s *mockAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
 	return nil, nil

@@ -9,23 +9,25 @@ import (
 type State string
 
 const (
-	StateDraft     State = "draft"
-	StateScheduled State = "scheduled"
-	StateRunning   State = "running"
-	StateSold      State = "sold"
-	StateFailed    State = "failed"
-	StateCancelled State = "cancelled"
+	StateDraft          State = "draft"
+	StateScheduled      State = "scheduled"
+	StateRunning        State = "running"
+	StateSold           State = "sold"
+	StateFailed         State = "failed"
+	StateCancelled      State = "cancelled"
+	StatePaymentTimeout State = "payment_timeout"
 )
 
 // Event 表示状态转移的触发事件。
 type Event string
 
 const (
-	EventPublish      Event = "publish"
-	EventStart        Event = "start"
-	EventCancel       Event = "cancel"
-	EventSettleSold   Event = "settle_sold"
-	EventSettleFailed Event = "settle_failed"
+	EventPublish        Event = "publish"
+	EventStart          Event = "start"
+	EventCancel         Event = "cancel"
+	EventSettleSold     Event = "settle_sold"
+	EventSettleFailed   Event = "settle_failed"
+	EventPaymentTimeout Event = "payment_timeout"
 )
 
 // ErrInvalidTransition 当不允许进行状态转移时返回。
@@ -47,10 +49,13 @@ var TransitionTable = map[State]map[Event]State{
 		EventSettleFailed: StateFailed,
 		EventCancel:       StateCancelled,
 	},
+	StateSold: {
+		EventPaymentTimeout: StatePaymentTimeout,
+	},
 	// 终态显式空表，禁止任何出站迁移
-	StateSold:      {},
-	StateFailed:    {},
-	StateCancelled: {},
+	StateFailed:         {},
+	StateCancelled:      {},
+	StatePaymentTimeout: {},
 }
 
 // Machine 处理状态转移并验证其正确性。

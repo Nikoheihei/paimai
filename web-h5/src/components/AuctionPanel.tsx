@@ -46,6 +46,7 @@ function fmt(cents: number): string { return (cents / 100).toFixed(2) }
 function priceLabel(a: Auction): string {
   switch (a.status) {
     case 'sold':      return '落槌价'
+    case 'payment_timeout': return '失效成交价'
     case 'running':   return a.currentPriceCents > 0 ? '当前最高价' : '起拍价'
     case 'scheduled': return '起拍价'
     default:          return '-'
@@ -53,7 +54,7 @@ function priceLabel(a: Auction): string {
 }
 
 function priceCents(a: Auction): number {
-  return a.status === 'sold' ? a.currentPriceCents
+  return (a.status === 'sold' || a.status === 'payment_timeout') ? a.currentPriceCents
     : a.currentPriceCents > 0 ? a.currentPriceCents
     : a.startPriceCents
 }
@@ -62,6 +63,16 @@ function modeLabel(mode: Auction['mode']): string {
   if (mode === 'extension') return '延时'
   if (mode === 'reserve') return '保底价'
   return '绝杀'
+}
+
+function wsEventAuctionId(message: WsMessage): number | undefined {
+  const data = message.data as { auctionId?: number; payload?: { auctionId?: number } } | undefined
+  return data?.auctionId ?? data?.payload?.auctionId
+}
+
+function wsEventBuyerId(message: WsMessage): number | undefined {
+  const data = message.data as { buyerId?: number; payload?: { buyerId?: number } } | undefined
+  return data?.buyerId ?? data?.payload?.buyerId
 }
 
 export default function AuctionPanel({
@@ -89,6 +100,7 @@ export default function AuctionPanel({
   const payTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const payTriggeredRef = useRef<number | null>(null)
   const payDeadlineRef = useRef(0) // 支付截止时间戳（毫秒），0 表示未开始
+  const handledWsMessageRef = useRef<WsMessage | null>(null)
 
   // 初始加载
   useEffect(() => {
@@ -113,6 +125,8 @@ export default function AuctionPanel({
   // WS 消息处理
   useEffect(() => {
     if (!wsMessage || !current) return
+    if (handledWsMessageRef.current === wsMessage) return
+    handledWsMessageRef.current = wsMessage
     const t = wsMessage.type
 
     if (t === 'bid.accepted') {
@@ -149,7 +163,44 @@ export default function AuctionPanel({
     }
 
     if (t === 'ranking.updated') getRanking(current.id, 10).then(setRanking)
-  }, [wsMessage, current, onAuctionEnd, onOutbid])
+
+    if (t === 'order.paid') {
+      const eventAuctionId = wsEventAuctionId(wsMessage)
+      if (eventAuctionId && eventAuctionId !== current.id) return
+      fetchAuction(current.id).then(setCurrent)
+      getRanking(current.id, 10).then(setRanking)
+      if (wsEventBuyerId(wsMessage) === userId) {
+        if (payTimerRef.current) {
+          clearInterval(payTimerRef.current)
+          payTimerRef.current = null
+        }
+        payDeadlineRef.current = 0
+        setPayCountdown(0)
+        setShowPayModal(false)
+        onPaid?.(current.id)
+        setBidStatus('ok')
+        setBidMsg('支付成功！')
+      }
+    }
+    if (t === 'order.closed' || t === 'auction.payment_timeout') {
+      const eventAuctionId = wsEventAuctionId(wsMessage)
+      if (eventAuctionId && eventAuctionId !== current.id) return
+      fetchAuction(current.id).then(setCurrent)
+      getRanking(current.id, 10).then(setRanking)
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      if (current.winnerUserId === userId || wsEventBuyerId(wsMessage) === userId) {
+        if (payTimerRef.current) {
+          clearInterval(payTimerRef.current)
+          payTimerRef.current = null
+        }
+        payDeadlineRef.current = 0
+        setPayCountdown(0)
+        setShowPayModal(false)
+        setBidStatus('fail')
+        setBidMsg('支付超时，订单已关闭')
+      }
+    }
+  }, [wsMessage, current, onAuctionEnd, onOutbid, onPaid, userId])
 
   // 出价
   const handleBid = useCallback(async () => {
@@ -243,6 +294,15 @@ export default function AuctionPanel({
         onPaid?.(current.id)
         setBidStatus('ok')
         setBidMsg('支付成功！')
+        getRanking(current.id, 10).then(setRanking)
+        return
+      }
+      if (order.status === 'closed') {
+        setPayOrder(order)
+        stopPayCountdown()
+        setBidStatus('fail')
+        setBidMsg('支付超时，订单已关闭')
+        fetchAuction(current.id).then(setCurrent)
         return
       }
       setPayOrder(order)
@@ -252,7 +312,7 @@ export default function AuctionPanel({
       setBidStatus('fail')
       setBidMsg(err.message || '加载订单失败')
     }
-  }, [current, loadPaymentOrder, onPaid, paidAuctionIds, payOrder, startPayCountdown])
+  }, [current, loadPaymentOrder, onPaid, paidAuctionIds, payOrder, startPayCountdown, stopPayCountdown])
 
   const soldWinnerAuctionId = current?.status === 'sold' && current.winnerUserId === userId
     ? current.id
@@ -278,6 +338,16 @@ export default function AuctionPanel({
           payTriggeredRef.current = soldWinnerAuctionId
           stopPayCountdown()
           onPaid?.(soldWinnerAuctionId)
+          return
+        }
+        if (order.status === 'closed') {
+          setPayOrder(order)
+          payTriggeredRef.current = soldWinnerAuctionId
+          stopPayCountdown()
+          setShowPayModal(false)
+          setBidStatus('fail')
+          setBidMsg('支付超时，订单已关闭')
+          fetchAuction(soldWinnerAuctionId).then(setCurrent)
           return
         }
         setPayOrder(order)
@@ -324,6 +394,7 @@ export default function AuctionPanel({
         setBidMsg('支付成功！')
         setShowPayModal(false)
         stopPayCountdown()
+        getRanking(current.id, 10).then(setRanking)
         return
       }
       const addrSnapshot = `${selectedAddress.name} ${selectedAddress.phone} ${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail}`
@@ -337,8 +408,15 @@ export default function AuctionPanel({
       payTriggeredRef.current = current.id
       window.dispatchEvent(new CustomEvent('order:refresh'))
       fetchAuction(current.id).then(setCurrent)
+      getRanking(current.id, 10).then(setRanking)
     } catch (err: any) {
       setBidMsg(err.message || '支付失败')
+      if (String(err.message || '').includes('timeout')) {
+        setShowPayModal(false)
+        stopPayCountdown()
+        fetchAuction(current.id).then(setCurrent)
+        window.dispatchEvent(new CustomEvent('order:refresh'))
+      }
     } finally {
       setPayLoading(false)
     }
@@ -567,7 +645,12 @@ export default function AuctionPanel({
               <li key={item.rank} className={`ranking-item ${item.userId===userId?'me':''}`}>
                 <span className="rank-num">#{item.rank}</span>
                 <div className="ranking-user">
-                  <div className="ranking-user-name">{item.userId===userId?'我':`用户${item.userId}`}</div>
+                  <div className="ranking-user-line">
+                    <div className="ranking-user-name">{item.userId===userId?'我':`用户${item.userId}`}</div>
+                    {isCurrentPaid && item.userId === userId && (
+                      <span className="ranking-paid-badge">已支付</span>
+                    )}
+                  </div>
                 </div>
                 <span className="ranking-amount">&yen;{fmt(item.amountCents)}</span>
               </li>

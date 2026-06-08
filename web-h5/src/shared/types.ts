@@ -43,13 +43,14 @@ export interface Product {
   name: string
   imageUrl: string
   description: string
+  status?: 'available' | 'locked' | 'offline'
   createdAt: string
 }
 
 // === 竞拍 ===
 
 export type AuctionMode = 'sudden_death' | 'extension' | 'reserve'
-export type AuctionStatus = 'draft' | 'scheduled' | 'running' | 'sold' | 'failed' | 'cancelled'
+export type AuctionStatus = 'draft' | 'scheduled' | 'running' | 'sold' | 'failed' | 'cancelled' | 'payment_timeout'
 
 export interface Auction {
   id: number

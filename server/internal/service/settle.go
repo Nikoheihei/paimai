@@ -21,6 +21,8 @@ type SettleService struct {
 	now        func() time.Time
 }
 
+const PaymentWindow = 5 * time.Minute
+
 // NewSettleService 创建结算服务。
 func NewSettleService(adminStore repository.AdminStore) *SettleService {
 	return &SettleService{
@@ -71,7 +73,9 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 		}
 		// 有 sold 状态但没有订单（数据异常），尝试生成
 	}
-	if auction.Status == string(statemachine.StateFailed) || auction.Status == string(statemachine.StateCancelled) {
+	if auction.Status == string(statemachine.StateFailed) ||
+		auction.Status == string(statemachine.StateCancelled) ||
+		auction.Status == string(statemachine.StatePaymentTimeout) {
 		return &SettleResult{
 			AuctionID: auctionID,
 			Settled:   false,
@@ -100,6 +104,9 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 			if err := tx.UpdateAuction(ctx, auction); err != nil {
 				return err
 			}
+			if err := tx.UpdateProductStatus(ctx, auction.ProductID, ProductStatusAvailable); err != nil {
+				return err
+			}
 			result = &SettleResult{
 				AuctionID:       auction.ID,
 				Settled:         true,
@@ -113,6 +120,9 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 		if auction.ReservePriceCents != nil && auction.CurrentPriceCents < *auction.ReservePriceCents {
 			auction.Status = string(statemachine.StateFailed)
 			if err := tx.UpdateAuction(ctx, auction); err != nil {
+				return err
+			}
+			if err := tx.UpdateProductStatus(ctx, auction.ProductID, ProductStatusAvailable); err != nil {
 				return err
 			}
 			result = &SettleResult{
@@ -185,47 +195,69 @@ type PayOrderInput struct {
 	AddressSnapshot string  `json:"addressSnapshot"`
 }
 
-// PayOrder 模拟支付——直接将订单状态从 pending_payment 设为 paid，并记录收货地址。
-// 幂等：已支付的订单直接返回成功。
+// PayOrder 模拟支付，并以 MySQL 订单状态作为权威判断支付窗口。
+// 幂等：已支付的订单直接返回成功；超时订单会在事务内关闭并释放商品。
 func (s *SettleService) PayOrder(ctx context.Context, orderID uint64, input PayOrderInput) (*model.Order, error) {
-	order, err := s.adminStore.GetOrder(ctx, orderID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
+	var paid *model.Order
+	if err := s.adminStore.WithTx(ctx, func(tx repository.AdminStore) error {
+		order, err := tx.GetOrder(ctx, orderID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
 		}
+
+		switch order.Status {
+		case "paid":
+			paid = order
+			return nil
+		case "closed":
+			return fmt.Errorf("%w: 订单已关闭，无法支付", ErrOrderPaymentTimeout)
+		case "pending_payment":
+		default:
+			return fmt.Errorf("%w: 当前订单状态不允许支付: %s", ErrInvalidTransition, order.Status)
+		}
+
+		now := s.now()
+		if isPaymentExpired(order, now) {
+			if _, err := s.closePaymentTimeoutTx(ctx, tx, order, now); err != nil {
+				return err
+			}
+			return ErrOrderPaymentTimeout
+		}
+
+		if err := tx.UpdateOrderStatus(ctx, orderID, "paid", &now, input.AddressID, input.AddressSnapshot); err != nil {
+			refreshed, refreshErr := tx.GetOrder(ctx, orderID)
+			if refreshErr == nil {
+				if refreshed.Status == "paid" {
+					paid = refreshed
+					return nil
+				}
+				if refreshed.Status == "closed" {
+					return ErrOrderPaymentTimeout
+				}
+			}
+			return err
+		}
+
+		order.Status = "paid"
+		order.PaidAt = &now
+		if input.AddressID != nil {
+			order.AddressID = input.AddressID
+		}
+		if input.AddressSnapshot != "" {
+			order.AddressSnapshot = input.AddressSnapshot
+		}
+		if err := createOrderPaidEvent(ctx, tx, order); err != nil {
+			return err
+		}
+		paid = order
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-
-	// 已支付 → 幂等返回
-	if order.Status == "paid" {
-		return order, nil
-	}
-
-	// 条件更新：只有 pending_payment 才能转为 paid
-	now := s.now()
-	if err := s.adminStore.UpdateOrderStatus(ctx, orderID, "paid", &now, input.AddressID, input.AddressSnapshot); err != nil {
-		// RowsAffected=0 或 status 不匹配 → 重新读取确认真实状态
-		refreshed, refreshErr := s.adminStore.GetOrder(ctx, orderID)
-		if refreshErr == nil {
-			if refreshed.Status == "paid" {
-				return refreshed, nil
-			}
-			if refreshed.Status == "closed" {
-				return nil, fmt.Errorf("%w: 订单已关闭，无法支付", ErrInvalidTransition)
-			}
-		}
-		return nil, err
-	}
-
-	order.Status = "paid"
-	order.PaidAt = &now
-	if input.AddressID != nil {
-		order.AddressID = input.AddressID
-	}
-	if input.AddressSnapshot != "" {
-		order.AddressSnapshot = input.AddressSnapshot
-	}
-	return order, nil
+	return paid, nil
 }
 
 // PayBuyerOrder 模拟支付当前买家的订单，并校验订单归属。
@@ -297,6 +329,178 @@ func (s *SettleService) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]
 		return nil, err
 	}
 	return s.enrichOrders(ctx, orders), nil
+}
+
+// CloseExpiredPaymentOrders 扫描并关闭支付超时的待支付订单。
+// 该任务可重复执行；单个订单的状态条件更新和事件 UUID 保证幂等。
+func (s *SettleService) CloseExpiredPaymentOrders(ctx context.Context, limit int) (int, error) {
+	cutoff := s.now().Add(-PaymentWindow)
+	orders, err := s.adminStore.ListExpiredPendingOrders(ctx, cutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	closed := 0
+	var errs []error
+	for _, order := range orders {
+		ok, err := s.closePaymentTimeoutOrder(ctx, order.ID)
+		if err != nil {
+			if errors.Is(err, ErrInvalidTransition) || errors.Is(err, ErrOrderPaymentTimeout) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("订单 %d: %w", order.ID, err))
+			continue
+		}
+		if ok {
+			closed++
+		}
+	}
+	if len(errs) > 0 {
+		return closed, fmt.Errorf("部分支付超时订单关闭失败: %v", errors.Join(errs...))
+	}
+	return closed, nil
+}
+
+func (s *SettleService) closePaymentTimeoutOrder(ctx context.Context, orderID uint64) (bool, error) {
+	closed := false
+	err := s.adminStore.WithTx(ctx, func(tx repository.AdminStore) error {
+		order, err := tx.GetOrder(ctx, orderID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		ok, err := s.closePaymentTimeoutTx(ctx, tx, order, s.now())
+		if err != nil {
+			return err
+		}
+		closed = ok
+		return nil
+	})
+	return closed, err
+}
+
+func (s *SettleService) closePaymentTimeoutTx(ctx context.Context, tx repository.AdminStore, order *model.Order, now time.Time) (bool, error) {
+	switch order.Status {
+	case "paid":
+		return false, nil
+	case "closed":
+		return false, nil
+	case "pending_payment":
+	default:
+		return false, fmt.Errorf("%w: 当前订单状态不允许关闭: %s", ErrInvalidTransition, order.Status)
+	}
+	if !isPaymentExpired(order, now) {
+		return false, nil
+	}
+
+	if err := tx.UpdateOrderStatus(ctx, order.ID, "closed", nil, nil, ""); err != nil {
+		refreshed, refreshErr := tx.GetOrder(ctx, order.ID)
+		if refreshErr == nil {
+			switch refreshed.Status {
+			case "paid", "closed":
+				return false, nil
+			}
+		}
+		return false, err
+	}
+	order.Status = "closed"
+
+	auction, err := tx.GetAuction(ctx, order.AuctionID)
+	if err != nil {
+		return false, err
+	}
+	if auction.Status == string(statemachine.StateSold) {
+		next, err := transition(auction.Status, statemachine.EventPaymentTimeout)
+		if err != nil {
+			return false, err
+		}
+		auction.Status = string(next)
+		if err := tx.UpdateAuction(ctx, auction); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.UpdateProductStatus(ctx, order.ProductID, ProductStatusAvailable); err != nil {
+		return false, err
+	}
+	if err := createOrderClosedEvent(ctx, tx, order, auction, "payment_timeout"); err != nil {
+		return false, err
+	}
+	if err := createAuctionPaymentTimeoutEvent(ctx, tx, order, auction); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func isPaymentExpired(order *model.Order, now time.Time) bool {
+	return now.After(order.CreatedAt.Add(PaymentWindow))
+}
+
+func createOrderPaidEvent(ctx context.Context, store repository.AdminStore, order *model.Order) error {
+	auction, err := store.GetAuction(ctx, order.AuctionID)
+	if err != nil {
+		return err
+	}
+	eventID := fmt.Sprintf("order-paid-%d-%d", order.AuctionID, order.ID)
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      "order.paid",
+		"auctionId": order.AuctionID,
+		"orderId":   order.ID,
+		"buyerId":   order.BuyerID,
+		"sellerId":  order.SellerID,
+		"roomId":    auction.RoomID,
+		"status":    order.Status,
+		"eventId":   eventID,
+	})
+	return store.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: "order.paid",
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: eventID,
+	})
+}
+
+func createOrderClosedEvent(ctx context.Context, store repository.AdminStore, order *model.Order, auction *model.Auction, reason string) error {
+	eventID := fmt.Sprintf("order-closed-%d-%s", order.ID, reason)
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      "order.closed",
+		"eventId":   eventID,
+		"orderId":   order.ID,
+		"auctionId": order.AuctionID,
+		"productId": order.ProductID,
+		"buyerId":   order.BuyerID,
+		"sellerId":  order.SellerID,
+		"roomId":    auction.RoomID,
+		"status":    order.Status,
+		"reason":    reason,
+	})
+	return store.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: "order.closed",
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: eventID,
+	})
+}
+
+func createAuctionPaymentTimeoutEvent(ctx context.Context, store repository.AdminStore, order *model.Order, auction *model.Auction) error {
+	eventID := fmt.Sprintf("auction-payment-timeout-%d-%d", auction.ID, order.ID)
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      "auction.payment_timeout",
+		"eventId":   eventID,
+		"auctionId": auction.ID,
+		"productId": auction.ProductID,
+		"roomId":    auction.RoomID,
+		"orderId":   order.ID,
+		"status":    auction.Status,
+		"reason":    "payment_timeout",
+	})
+	return store.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: "auction.payment_timeout",
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: eventID,
+	})
 }
 
 func (s *SettleService) enrichOrders(ctx context.Context, orders []model.Order) []OrderDetail {

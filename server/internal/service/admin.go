@@ -21,14 +21,19 @@ const (
 	AuctionModeSuddenDeath = "sudden_death"
 	AuctionModeExtension   = "extension"
 	AuctionModeReserve     = "reserve"
+
+	ProductStatusAvailable = "available"
+	ProductStatusLocked    = "locked"
+	ProductStatusOffline   = "offline"
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid input")
-	ErrNotFound           = errors.New("not found")
-	ErrInvalidTransition  = errors.New("invalid auction transition")
-	ErrAuctionNotEditable = errors.New("auction is not editable")
-	ErrUnauthorized       = errors.New("unauthorized")
+	ErrInvalidInput        = errors.New("invalid input")
+	ErrNotFound            = errors.New("not found")
+	ErrInvalidTransition   = errors.New("invalid auction transition")
+	ErrAuctionNotEditable  = errors.New("auction is not editable")
+	ErrUnauthorized        = errors.New("unauthorized")
+	ErrOrderPaymentTimeout = errors.New("order payment timeout")
 )
 
 // AdminService 聚合后台管理侧的业务能力。
@@ -119,6 +124,7 @@ func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input
 		Name:        input.Name,
 		ImageURL:    strings.TrimSpace(input.ImageURL),
 		Description: strings.TrimSpace(input.Description),
+		Status:      ProductStatusAvailable,
 	}
 
 	// 使用事务：创建商品 + 写入 Outbox 事件
@@ -160,12 +166,6 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 	if input.RoomID == 0 || input.ProductID == 0 {
 		return nil, fmt.Errorf("%w: roomId and productId are required", ErrInvalidInput)
 	}
-	if _, err := s.store.GetProduct(ctx, input.ProductID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
 	if err := validateAuctionRules(input.Mode, input.StartPriceCents, input.BidIncrementCents, input.CapPriceCents, input.ReservePriceCents, input.ExtendThresholdSec, input.ExtendDurationSec); err != nil {
 		return nil, err
 	}
@@ -198,7 +198,28 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 		StartAt:            startAt,
 		EndAt:              endAt,
 	}
-	if err := s.store.CreateAuction(ctx, auction); err != nil {
+	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
+		product, err := tx.GetProduct(ctx, input.ProductID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if product.Status == "" {
+			product.Status = ProductStatusAvailable
+		}
+		if product.Status != ProductStatusAvailable {
+			return fmt.Errorf("%w: product is %s", ErrInvalidInput, product.Status)
+		}
+		if err := tx.CreateAuction(ctx, auction); err != nil {
+			return err
+		}
+		if err := tx.UpdateProductStatus(ctx, product.ID, ProductStatusLocked); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	s.enqueueAuctionRefresh(ctx, "auction.created", auction)
@@ -344,19 +365,34 @@ func (s *AdminService) ListAuctionBids(ctx context.Context, auctionID uint64) ([
 
 // transitionAuction 封装竞拍状态流转、取消原因写入和持久化更新。
 func (s *AdminService) transitionAuction(ctx context.Context, id uint64, event statemachine.Event, reason string) (*model.Auction, error) {
-	auction, err := s.getAuction(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	next, err := transition(auction.Status, event)
-	if err != nil {
-		return nil, err
-	}
-	auction.Status = string(next)
-	if event == statemachine.EventCancel {
-		auction.CancelReason = reason
-	}
-	if err := s.store.UpdateAuction(ctx, auction); err != nil {
+	var auction *model.Auction
+	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
+		a, err := tx.GetAuction(ctx, id)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		next, err := transition(a.Status, event)
+		if err != nil {
+			return err
+		}
+		a.Status = string(next)
+		if event == statemachine.EventCancel {
+			a.CancelReason = reason
+		}
+		if err := tx.UpdateAuction(ctx, a); err != nil {
+			return err
+		}
+		if event == statemachine.EventCancel {
+			if err := tx.UpdateProductStatus(ctx, a.ProductID, ProductStatusAvailable); err != nil {
+				return err
+			}
+		}
+		auction = a
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	s.enqueueAuctionRefresh(ctx, "auction.updated", auction)
@@ -581,6 +617,83 @@ func (s *AdminService) UpdateProduct(ctx context.Context, id uint64, input Updat
 		return nil, err
 	}
 	return product, nil
+}
+
+// RelistProduct 基于商品重新创建一个新的竞拍，不复用旧竞拍记录。
+func (s *AdminService) RelistProduct(ctx context.Context, sellerID uint64, productID uint64, input AuctionInput) (*model.Auction, error) {
+	product, err := s.store.GetProduct(ctx, productID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if sellerID != 0 && product.SellerID != sellerID {
+		return nil, ErrUnauthorized
+	}
+	if product.Status == "" {
+		product.Status = ProductStatusAvailable
+	}
+	if product.Status != ProductStatusAvailable {
+		return nil, fmt.Errorf("%w: product is %s", ErrInvalidInput, product.Status)
+	}
+	input.ProductID = productID
+	return s.CreateAuction(ctx, input)
+}
+
+// OfflineProduct 将商品下架。已被竞拍占用的商品必须先等待竞拍结束或取消。
+func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, productID uint64) (*model.Product, error) {
+	var product *model.Product
+	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
+		p, err := tx.GetProduct(ctx, productID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if sellerID != 0 && p.SellerID != sellerID {
+			return ErrUnauthorized
+		}
+		if p.Status == ProductStatusLocked {
+			return fmt.Errorf("%w: product has active auction", ErrInvalidInput)
+		}
+		if p.Status == ProductStatusOffline {
+			product = p
+			return nil
+		}
+		p.Status = ProductStatusOffline
+		if err := tx.UpdateProductStatus(ctx, p.ID, ProductStatusOffline); err != nil {
+			return err
+		}
+		if err := createProductEvent(ctx, tx, "product.offline", p); err != nil {
+			return err
+		}
+		product = p
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return product, nil
+}
+
+func createProductEvent(ctx context.Context, store repository.AdminStore, eventType string, product *model.Product) error {
+	eventID := fmt.Sprintf("%s-%d-%d", eventType, product.ID, time.Now().UnixNano())
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      eventType,
+		"eventId":   eventID,
+		"productId": product.ID,
+		"sellerId":  product.SellerID,
+		"name":      product.Name,
+		"imageUrl":  product.ImageURL,
+		"status":    product.Status,
+	})
+	return store.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: eventType,
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: eventID,
+	})
 }
 
 // DeleteProduct 删除商品。有关联活跃竞拍（draft/scheduled/running）时拒绝。
