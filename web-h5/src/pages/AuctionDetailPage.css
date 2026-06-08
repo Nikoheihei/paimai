@@ -1,0 +1,142 @@
+.auction-detail-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.skeleton-loader {
+  padding: 16px;
+  gap: 16px;
+}
+.skeleton-header, .skeleton-price, .skeleton-history {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  animation: pulse 1.5s infinite;
+}
+.skeleton-header { height: 48px; }
+.skeleton-price { height: 120px; }
+.skeleton-history { flex: 1; }
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.pay-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pay-amount-box {
+  text-align: center;
+}
+.pay-amount-box .label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.pay-amount-box .amount {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--primary);
+  margin-top: 4px;
+}
+
+.pay-countdown-alert {
+  text-align: center;
+  font-size: 14px;
+  color: #ff4757;
+  font-weight: 700;
+}
+
+.address-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.section-title {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.empty-address {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255,152,0,.08);
+  border: 1px solid rgba(255,152,0,.2);
+  color: #ffa726;
+  font-size: 13px;
+  text-align: center;
+}
+
+.address-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.address-option-btn {
+  text-align: left;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255,255,255,.04);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.address-option-btn.active {
+  border-color: var(--green);
+  background: rgba(37,199,120,.12);
+}
+
+.addr-name-row {
+  display: flex;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.addr-detail-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.timeout-text {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pay-drawer-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+.btn-cancel, .btn-confirm {
+  flex: 1;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+}
+.btn-cancel {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.btn-confirm {
+  background: var(--primary-grad);
+  color: #fff;
+}
+.btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

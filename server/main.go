@@ -152,7 +152,7 @@ func main() {
 
 		handler.RegisterUploadRoutes(r)
 		handler.RegisterAuthMeRoute(r, authService)
-		handler.RegisterAddressRoutes(r.Group("/api"))
+		handler.RegisterAddressRoutes(r.Group("/api"), database)
 
 		// 启动时结算已过期的 running 竞拍
 		if count, err := adminService.StartDueScheduledAuctions(context.Background()); err == nil && count > 0 {

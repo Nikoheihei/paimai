@@ -60,6 +60,7 @@ async function apiFetch<T = any>(path: string, options: RequestInit = {}): Promi
 }
 
 export type AuthResult = { userId: number; username: string; nickname: string; token: string }
+export type MeResult = { userId: number; username: string; nickname: string; avatarUrl: string; role: string }
 export async function login(username: string, password: string): Promise<AuthResult> {
   const res = await fetch(`${BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
   const body = await parseApiResponse<AuthResult>(res)
@@ -71,6 +72,9 @@ export async function register(username: string, password: string, nickname?: st
   const body = await parseApiResponse<AuthResult>(res)
   if (body.code !== 0) throw new Error(body.message || `请求失败（code ${body.code}）`)
   return body.data
+}
+export async function getMe(): Promise<MeResult> {
+  return apiFetch('/auth/me')
 }
 
 export type LiveRoom = { id: number; sellerId: number; title: string; coverUrl: string; status: string; createdAt: string }
@@ -97,9 +101,9 @@ export async function closeRoom(id: number): Promise<CloseRoomResult> {
   return apiFetch(`/admin/rooms/${id}/close`, { method: 'POST' })
 }
 
-export type Product = { id: number; sellerId: number; name: string; imageUrl: string; description: string; status?: 'available' | 'locked' | 'offline'; createdAt: string }
-export async function createProduct(name: string, imageUrl?: string, description?: string): Promise<Product> {
-  return apiFetch('/admin/products', { method: 'POST', body: JSON.stringify({ sellerId: 0, name, imageUrl: imageUrl || '', description: description || '' }) })
+export type Product = { id: number; sellerId: number; name: string; imageUrl: string; description: string; status?: 'available' | 'locked' | 'offline'; stock?: number; createdAt: string }
+export async function createProduct(name: string, imageUrl?: string, description?: string, stock = 1): Promise<Product> {
+  return apiFetch('/admin/products', { method: 'POST', body: JSON.stringify({ sellerId: 0, name, imageUrl: imageUrl || '', description: description || '', stock }) })
 }
 export async function listProducts(): Promise<Product[]> {
   return apiFetch('/admin/products')

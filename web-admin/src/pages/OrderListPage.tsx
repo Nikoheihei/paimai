@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getOrderDetail, listOrders, type Order } from '../api/client'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
@@ -27,8 +27,10 @@ export default function OrderListPage() {
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
 
-  const load = () => { listOrders().then(setOrders).catch(() => {}) }
-  useEffect(load, [])
+  const load = useCallback(() => { listOrders().then(setOrders).catch(() => {}) }, [])
+  useEffect(() => {
+    load()
+  }, [load])
 
   useEffect(() => {
     const refresh = () => {
@@ -37,9 +39,9 @@ export default function OrderListPage() {
         getOrderDetail(detail.id).then(setDetail).catch(() => {})
       }
     }
-    const timer = window.setInterval(refresh, 10000)
+    const timer = window.setInterval(refresh, 2000)
     return () => window.clearInterval(timer)
-  }, [detail?.id])
+  }, [detail?.id, load])
 
   // 监听订单刷新事件（竞拍成交后自动刷新）
   useEffect(() => {
@@ -51,7 +53,7 @@ export default function OrderListPage() {
     }
     window.addEventListener('order:refresh', handler)
     return () => window.removeEventListener('order:refresh', handler)
-  }, [detail?.id])
+  }, [detail?.id, load])
 
   useEffect(() => {
     let result = orders

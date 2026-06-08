@@ -9,7 +9,7 @@ import (
 
 // TestGenerateAndParse 验证 GenerateToken 生成的 token 能被 ParseToken 正确解析。
 func TestGenerateAndParse(t *testing.T) {
-	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	now := time.Now()
 	tokenStr, err := GenerateToken(1, "alice", "buyer", "Alice", now)
 	if err != nil {
 		t.Fatalf("GenerateToken() error = %v", err)
@@ -36,7 +36,7 @@ func TestGenerateAndParse(t *testing.T) {
 // TestParseTokenExpired 验证过期 token 会被拒绝。
 func TestParseTokenExpired(t *testing.T) {
 	// 签发的 token 在 7 天前过期
-	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	now := time.Now()
 	past := now.Add(-8 * 24 * time.Hour)
 	tokenStr, err := GenerateToken(2, "bob", "seller", "Bob", past)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestParseTokenEmpty(t *testing.T) {
 
 // TestParseTokenInvalidAlg 验证非 HS256 算法的 token 会被拒绝。
 func TestParseTokenInvalidAlg(t *testing.T) {
-	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	now := time.Now()
 	claims := Claims{
 		UserID:   3,
 		Username: "mallory",

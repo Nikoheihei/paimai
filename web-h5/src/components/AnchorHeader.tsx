@@ -11,13 +11,13 @@ import type { UserInfo } from '../shared/types'
 
 type Props = {
   info: UserInfo
-  viewerCount?: number
+  viewerCount?: React.ReactNode
   onFollow?: () => void
   onMoreRooms?: () => void
   isPlaceholder?: boolean
 }
 
-export default function AnchorHeader({ info, viewerCount=0, onFollow, onMoreRooms, isPlaceholder=false }: Props) {
+export default function AnchorHeader({ info, viewerCount, onFollow, onMoreRooms, isPlaceholder=false }: Props) {
   const [followed, setFollowed] = useState(false)
 
   const handleFollow = () => {
@@ -39,7 +39,7 @@ export default function AnchorHeader({ info, viewerCount=0, onFollow, onMoreRoom
       {/* 信息区 */}
       <div className="anchor-info">
         <div className="anchor-name">{info.nickname || `用户${info.userId}`}</div>
-        <div className="anchor-viewers">{viewerCount.toLocaleString('zh-CN')} 在线</div>
+        <div className="anchor-viewers">{viewerCount} 在线</div>
       </div>
 
       {/* 关注按钮 */}

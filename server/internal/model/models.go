@@ -31,6 +31,7 @@ type Product struct {
 	ImageURL    string    `gorm:"size:512" json:"imageUrl"`
 	Description string    `gorm:"type:text" json:"description"`
 	Status      string    `gorm:"type:enum('available','locked','offline');default:'available';not null;index" json:"status"`
+	Stock       int       `gorm:"not null;default:1" json:"stock"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -80,6 +81,21 @@ type UserAuth struct {
 	PasswordHash string    `gorm:"size:255;not null" json:"-"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// Address 表示买家收货地址。地址必须跟登录用户绑定，不能跨账号共享。
+type Address struct {
+	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    uint64    `gorm:"not null;index" json:"userId"`
+	Name      string    `gorm:"size:64;not null" json:"name"`
+	Phone     string    `gorm:"size:32;not null" json:"phone"`
+	Province  string    `gorm:"size:64" json:"province"`
+	City      string    `gorm:"size:64" json:"city"`
+	District  string    `gorm:"size:64" json:"district"`
+	Detail    string    `gorm:"size:255;not null" json:"detail"`
+	IsDefault bool      `gorm:"not null;default:false" json:"isDefault"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Order 表示拍卖成功后生成的最终购买订单。

@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getToken } from '../api/client'
 
 const BASE = '/api'
@@ -22,6 +23,7 @@ function authHeaders(): Record<string, string> {
 }
 
 export default function RoomListPage() {
+  const navigate = useNavigate()
   const [rooms, setRooms] = useState<LiveRoom[]>([])
   const [filtered, setFiltered] = useState<LiveRoom[]>([])
   const [search, setSearch] = useState('')
@@ -43,6 +45,13 @@ export default function RoomListPage() {
   }, [])
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load()
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
   useEffect(() => {
     if (!search.trim()) { setFiltered(rooms); return }
@@ -100,7 +109,7 @@ export default function RoomListPage() {
             <div
               key={room.id}
               className="room-card"
-              onClick={() => window.location.hash = `#/rooms/${room.id}`}
+              onClick={() => navigate(`/rooms/${room.id}`)}
             >
               <div className="room-card-cover" style={room.coverUrl ? { backgroundImage: `url(${room.coverUrl})` } : undefined}>
                 <span className="live-badge">LIVE</span>
@@ -108,7 +117,7 @@ export default function RoomListPage() {
               </div>
               <div className="room-card-body">
                 <h3>{room.title}</h3>
-                <p className="room-card-meta">房间 #{room.id}</p>
+                <p className="room-card-meta">正在直播</p>
               </div>
             </div>
           ))}

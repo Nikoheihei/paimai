@@ -14,11 +14,11 @@ type Props = {
   coverUrl?: string
   videoUrl?: string
   isLive: boolean
-  viewerCount?: number
+  viewerCount?: React.ReactNode
   roomTitle?: string
 }
 
-export default function VideoPlayer({ coverUrl, videoUrl, isLive, viewerCount = 0, roomTitle }: Props) {
+export default function VideoPlayer({ coverUrl, videoUrl, isLive, viewerCount, roomTitle }: Props) {
   const [playing, setPlaying] = useState(false)
   // 模拟动态光效
   const [glowPhase, setGlowPhase] = useState(0)
@@ -60,10 +60,10 @@ export default function VideoPlayer({ coverUrl, videoUrl, isLive, viewerCount = 
       </div>
 
       {/* 观看人数 */}
-      {isLive && viewerCount > 0 && (
+      {isLive && viewerCount && (
         <div className="vp-viewers">
           <span className="vp-eye-icon">&#128065;</span>
-          {viewerCount >= 10000 ? `${(viewerCount/10000).toFixed(1)}万` : viewerCount}
+          {viewerCount}
         </div>
       )}
     </div>

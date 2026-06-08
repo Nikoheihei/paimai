@@ -5,18 +5,19 @@
  */
 
 import { useState } from 'react'
-import { login, register, setToken } from '../api/client'
+import { useNavigate } from 'react-router-dom'
+import { login, register } from '../api/client'
+import { useAuthStore } from '../store/useAuthStore'
 
-type Props = {
-  onLogin: (userId: number) => void
-}
-
-export default function LoginPage({ onLogin }: Props) {
+export default function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  const navigate = useNavigate()
+  const authLogin = useAuthStore(state => state.login)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -26,8 +27,9 @@ export default function LoginPage({ onLogin }: Props) {
       const result = mode === 'login'
         ? await login(username, password)
         : await register(username, password)
-      setToken(result.token)
-      onLogin(result.userId)
+
+      authLogin(result.token, result.userId)
+      navigate('/', { replace: true })
     } catch (err: any) {
       setError(err.message || '操作失败')
     } finally {

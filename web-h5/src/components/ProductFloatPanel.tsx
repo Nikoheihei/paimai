@@ -6,6 +6,7 @@
 import { useState } from 'react'
 import type { Auction } from '../shared/types'
 import type { AuctionStatus } from '../shared/types'
+import Countdown from './Countdown'
 
 type TabKey = 'all' | 'running' | 'scheduled' | 'ended'
 
@@ -77,10 +78,18 @@ export default function ProductFloatPanel({
     }
   }
 
+  function countdownLabel(a: Auction): string {
+    return a.status === 'scheduled' ? '距开拍' : '距结束'
+  }
+
+  function countdownTarget(a: Auction): string {
+    return a.status === 'scheduled' ? a.startAt : a.endAt
+  }
+
   return (
     <div className={`product-float-panel ${collapsed ? 'collapsed' : ''}`}>
       {/* 收起/展开 toggle */}
-      <div className="product-float-toggle" onClick={() => setCollapsed(!collapsed)}>
+      <div className="pfp-toggle-btn" onClick={() => setCollapsed(!collapsed)}>
         {collapsed ? '◀' : '▶'}
       </div>
 
@@ -112,9 +121,9 @@ export default function ProductFloatPanel({
               >
                 {/* 商品缩略图 */}
                 {(productImages[a.productId]) ? (
-                  <img className="pfp-item-img" src={productImages[a.productId]} alt="" />
+                  <img className="pfp-item-thumb" src={productImages[a.productId]} alt="" />
                 ) : (
-                  <div className="pfp-item-img" style={{ display:'flex', alignItems:'center', justifyContent:'center', color:'#444', fontSize:11 }}>
+                  <div className="pfp-item-thumb" style={{ display:'flex', alignItems:'center', justifyContent:'center', color:'#444', fontSize:11 }}>
                     &#128206;
                   </div>
                 )}
@@ -123,9 +132,10 @@ export default function ProductFloatPanel({
                 {a.status !== 'draft' && a.status !== 'cancelled' && (
                   <div className="pfp-item-price">{priceLabel(a)} &yen;{(priceCents(a) / 100).toFixed(2)}</div>
                 )}
-                {a.status === 'scheduled' && (
-                  <div style={{ fontSize: 10, color: '#ff9800', marginTop: 2 }}>
-                    &#128276; 提醒我
+                {(a.status === 'running' || a.status === 'scheduled') && (
+                  <div className={`pfp-item-timer ${a.status}`}>
+                    <span>{countdownLabel(a)}</span>
+                    <Countdown endAt={countdownTarget(a)} />
                   </div>
                 )}
               </div>

@@ -29,7 +29,7 @@ func TestAuthRequiredInvalidToken(t *testing.T) {
 
 // TestAuthRequiredValidToken 验证有效 token 返回 200 且 context 中包含 userId。
 func TestAuthRequiredValidToken(t *testing.T) {
-	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	now := time.Now()
 	token, err := jwtpkg.GenerateToken(42, "testuser", "buyer", "Test", now)
 	if err != nil {
 		t.Fatalf("GenerateToken() error = %v", err)
@@ -46,7 +46,7 @@ func TestAuthRequiredValidToken(t *testing.T) {
 
 // TestAuthRequiredExpiredToken 验证过期 token 返回 401。
 func TestAuthRequiredExpiredToken(t *testing.T) {
-	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	now := time.Now()
 	past := now.Add(-8 * 24 * time.Hour)
 	token, err := jwtpkg.GenerateToken(99, "olduser", "seller", "Old", past)
 	if err != nil {

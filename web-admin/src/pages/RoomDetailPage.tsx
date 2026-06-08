@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, offlineProduct, listAuctions, updateAuction, publishAuction, startAuction, cancelAuction, relistProduct, settleAuction, type LiveRoom, type Product, type Auction } from '../api/client'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { getRoom, goLive, closeRoom, listProducts, createProduct, deleteProduct, offlineProduct, listAuctions, updateAuction, publishAuction, startAuction, cancelAuction, relistProduct, settleAuction, listOrders, type LiveRoom, type Product, type Auction, type Order } from '../api/client'
 import ImageUploader from '../components/ImageUploader'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
@@ -36,6 +36,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [room, setRoom] = useState<LiveRoom | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [auctions, setAuctions] = useState<Auction[]>([])
+  const [orders, setOrders] = useState<Order[]>([])
   const [auctionDurations, setAuctionDurations] = useState<Record<number, string>>({})
   const [activeTab, setActiveTab] = useState<TabKey>('products')
   const [msg, setMsg] = useState('')
@@ -44,6 +45,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const [newProductName, setNewProductName] = useState('')
   const [newProductDesc, setNewProductDesc] = useState('')
   const [newProductImage, setNewProductImage] = useState('')
+  const [newProductStock, setNewProductStock] = useState('1')
   const [showNewProduct, setShowNewProduct] = useState(false)
 
   // 上架配置表单（底层仍复用 auction 状态机）
@@ -73,16 +75,24 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   const loadAuctions = useCallback(() => {
     listAuctions(roomId).then(syncAuctions).catch(() => {})
   }, [roomId, syncAuctions])
+  const loadOrders = useCallback(() => {
+    listOrders().then(setOrders).catch(() => {})
+  }, [])
   const load = useCallback(() => {
     getRoom(roomId).then(setRoom).catch(() => {})
     listProducts().then(setProducts).catch(() => {})
     loadAuctions()
-  }, [roomId, loadAuctions])
+    loadOrders()
+  }, [roomId, loadAuctions, loadOrders])
   useEffect(load, [load])
   useEffect(() => {
     const timer = window.setInterval(load, 10000)
     return () => window.clearInterval(timer)
   }, [load])
+  useEffect(() => {
+    const timer = window.setInterval(loadOrders, 2000)
+    return () => window.clearInterval(timer)
+  }, [loadOrders])
 
   // === 房间操作 ===
   const handleGoLive = async () => {
@@ -96,9 +106,10 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   // === 商品操作 ===
   const handleCreateProduct = async () => {
     if (!newProductName.trim()) return
+    const stock = Math.max(1, parseInt(newProductStock, 10) || 1)
     try {
-      await createProduct(newProductName.trim(), newProductImage || '', newProductDesc.trim())
-      setNewProductName(''); setNewProductDesc(''); setNewProductImage('')
+      await createProduct(newProductName.trim(), newProductImage || '', newProductDesc.trim(), stock)
+      setNewProductName(''); setNewProductDesc(''); setNewProductImage(''); setNewProductStock('1')
       setShowNewProduct(false)
       listProducts().then(setProducts)
       setMsg('商品已添加')
@@ -113,8 +124,8 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     try { await offlineProduct(id); listProducts().then(setProducts); setMsg('商品已下架') } catch (err: any) { setMsg(err.message) }
   }
   const handleConfigureListing = (product: Product) => {
-    if ((product.status || 'available') !== 'available') {
-      setMsg('只有可上架商品才能重新开拍')
+    if ((product.stock ?? 0) <= 0) {
+      setMsg('库存不足，无法上架')
       return
     }
     setNewAuctionProductId(product.id)
@@ -232,7 +243,12 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
     if (mode === 'reserve') return '保留价'
     return '绝杀'
   }
-  const availableProducts = products.filter(p => (p.status || 'available') === 'available')
+  const availableProducts = products.filter(p => (p.stock ?? 0) > 0 && p.status !== 'offline')
+  const ordersByAuctionId = useMemo(() => {
+    const map: Record<number, Order> = {}
+    orders.forEach(order => { map[order.auctionId] = order })
+    return map
+  }, [orders])
 
   if (!room) return <div className="admin-page"><p className="empty">加载中…</p></div>
 
@@ -288,11 +304,15 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                   <ImageUploader value={newProductImage} onChange={handleImageUrlChange} placeholder="点击或拖拽上传商品封面图" />
                 </div>
                 <div className="field">
+                  <label>库存 *</label>
+                  <input type="number" min="1" step="1" value={newProductStock} onChange={e => setNewProductStock(e.target.value)} required />
+                </div>
+                <div className="field">
                   <label>描述</label>
                   <textarea placeholder="商品介绍..." value={newProductDesc} onChange={e => setNewProductDesc(e.target.value)} rows={3} />
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-                  <button type="button" className="admin-btn" onClick={() => { setShowNewProduct(false); setNewProductName(''); setNewProductImage(''); setNewProductDesc('') }}>取消</button>
+                  <button type="button" className="admin-btn" onClick={() => { setShowNewProduct(false); setNewProductName(''); setNewProductImage(''); setNewProductDesc(''); setNewProductStock('1') }}>取消</button>
                   <button type="submit" className="admin-btn primary">保存商品</button>
                 </div>
               </form>
@@ -302,7 +322,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
             {products.length > 0 ? (
               <table className="data-table">
                 <thead>
-                  <tr><th>缩略图</th><th>名称</th><th>描述</th><th>状态</th><th>操作</th></tr>
+                  <tr><th>缩略图</th><th>名称</th><th>描述</th><th>库存</th><th>状态</th><th>操作</th></tr>
                 </thead>
                 <tbody>
                   {products.map(p => (
@@ -314,13 +334,14 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                       </td>
                       <td><strong>{p.name}</strong><br /><span className="meta">ID: #{p.id}</span></td>
                       <td className="desc-cell">{p.description || '-'}</td>
+                      <td><strong>{p.stock ?? '-'}</strong></td>
                       <td>{productStatusBadge(p.status)}</td>
                       <td>
                         <div className="action-cell">
-                          <button className="admin-btn small primary" disabled={(p.status || 'available') !== 'available'} onClick={() => handleConfigureListing(p)}>
-                            重新开拍
+                          <button className="admin-btn small primary" disabled={(p.stock ?? 0) <= 0} onClick={() => handleConfigureListing(p)}>
+                            创建上架
                           </button>
-                          {p.status !== 'offline' && <button className="admin-btn small" disabled={p.status !== 'available'} onClick={() => handleOfflineProduct(p.id)}>下架</button>}
+                          {p.status !== 'offline' && <button className="admin-btn small" disabled={p.status === 'locked'} onClick={() => handleOfflineProduct(p.id)}>下架</button>}
                           <button className="admin-btn small danger" onClick={() => handleDeleteProduct(p.id)}>删除</button>
                         </div>
                       </td>
@@ -439,6 +460,7 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                 </thead>
                 <tbody>
                   {auctions.map(a => {
+                    const order = ordersByAuctionId[a.id]
                     // 价格文案规则
                     let priceLabel = '-'; let priceVal = a.startPriceCents
                     switch (a.status) {
@@ -469,13 +491,19 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
                             <span>{durationFromAuction(a)} 秒</span>
                           )}
                         </td>
-                        <td>{statusBadge(a.status)}</td>
+                        <td>{statusBadge(a.status, order)}</td>
                         <td>
                           <div className="action-cell">
-                            {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small" onClick={() => handleSaveDuration(a)}>保存时长</button>}
-                            {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small primary" onClick={() => handleManualList(a)}>手动上架</button>}
-                            {(a.status === 'draft' || a.status === 'scheduled') && <button className="admin-btn small danger" onClick={() => handleCancel(a.id)}>取消</button>}
+                            {(a.status === 'draft' || a.status === 'scheduled') && <>
+                              <button className="admin-btn small" onClick={() => handleSaveDuration(a)}>保存时长</button>
+                              <button className="admin-btn small primary" onClick={() => handleManualList(a)}>手动上架</button>
+                              <button className="admin-btn small danger" onClick={() => handleCancel(a.id)}>取消</button>
+                            </>}
                             {a.status === 'running' && <button className="admin-btn small primary" onClick={() => handleSettle(a.id)}>结算</button>}
+                            {a.status === 'sold' && order?.status === 'paid' && <span className="status-badge badge-green">成交完成</span>}
+                            {a.status === 'sold' && order?.status === 'closed' && <button className="admin-btn small primary" onClick={() => handleConfigureListing({ id: a.productId, name: products.find(p => p.id === a.productId)?.name || '', stock: 1 } as Product)}>重新开拍</button>}
+                            {a.status === 'sold' && (!order || order.status === 'pending_payment') && <span className="status-badge badge-blue">等待买家支付</span>}
+                            {(a.status === 'failed' || a.status === 'cancelled' || a.status === 'payment_timeout') && <button className="admin-btn small primary" onClick={() => handleConfigureListing({ id: a.productId, name: products.find(p => p.id === a.productId)?.name || '', stock: 1 } as Product)}>重新开拍</button>}
                           </div>
                         </td>
                       </tr>
@@ -493,15 +521,22 @@ export default function RoomDetailPage({ roomId, onBack }: Props) {
   )
 }
 
-function statusBadge(s: string) {
+function statusBadge(s: string, order?: Order) {
+  if (s === 'sold' && order?.status === 'paid') {
+    return <span className="status-badge badge-green">成交完成</span>
+  }
+  if (s === 'sold' && order?.status === 'closed') {
+    return <span className="status-badge badge-gray">订单已关闭</span>
+  }
   const map: Record<string, { text: string; cls: string }> = {
     draft:     { text: '待手动上架', cls: 'badge-gray' },
     scheduled: { text: '定时待上架', cls: 'badge-blue' },
     running:   { text: '已上架竞拍中', cls: 'badge-red' },
-    sold:      { text: '已成交', cls: 'badge-green' },
+    sold:      { text: '已成交待支付', cls: 'badge-orange' },
+    paid:      { text: '成交完成', cls: 'badge-green' },
     payment_timeout: { text: '支付超时', cls: 'badge-gray' },
     failed:    { text: '流拍', cls: 'badge-gray' },
-    cancelled: { text: '已下架/取消', cls: 'badge-gray' },
+    cancelled: { text: '已取消', cls: 'badge-gray' },
   }
   const info = map[s] || { text: s, cls: 'badge-gray' }
   return <span className={`status-badge ${info.cls}`}>{info.text}</span>

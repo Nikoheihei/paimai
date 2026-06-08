@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { isLoggedIn, clearToken } from './api/client'
+import { isLoggedIn, clearToken, getMe, type MeResult } from './api/client'
 import AdminLoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import RoomListPage from './pages/RoomListPage'
@@ -34,12 +34,25 @@ function parseHash(): Route {
 function App() {
   const [authed, setAuthed] = useState(() => isLoggedIn())
   const [route, setRoute] = useState<Route>(parseHash)
+  const [me, setMe] = useState<MeResult | null>(null)
 
   useEffect(() => {
     const handler = () => setRoute(parseHash())
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
+
+  useEffect(() => {
+    if (!authed) {
+      setMe(null)
+      return
+    }
+    getMe().then(setMe).catch(() => {
+      clearToken()
+      setAuthed(false)
+      window.location.hash = '#/login'
+    })
+  }, [authed])
 
   const handleLogin = () => {
     setAuthed(true)
@@ -49,6 +62,7 @@ function App() {
   const handleLogout = () => {
     clearToken()
     setAuthed(false)
+    setMe(null)
     window.location.hash = '#/login'
   }
 
@@ -63,6 +77,7 @@ function App() {
         <a href="#/rooms" className={navActive('rooms') || navActive('room-detail') ? 'active' : ''}>直播间</a>
         <a href="#/products" className={navActive('products')}>商品</a>
         <a href="#/orders" className={navActive('orders')}>订单</a>
+        <span className="admin-user-chip">{me?.nickname || me?.username || '已登录'}</span>
         <button className="logout-btn" onClick={handleLogout}>退出</button>
       </nav>
       <main>

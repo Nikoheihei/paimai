@@ -48,6 +48,9 @@ func (s *adminStoreStub) CreateProduct(_ context.Context, product *model.Product
 	if product.Status == "" {
 		product.Status = ProductStatusAvailable
 	}
+	if product.Stock == 0 {
+		product.Stock = 1
+	}
 	cp := *product
 	s.products[product.ID] = &cp
 	return nil
@@ -354,6 +357,40 @@ func (s *adminStoreStub) UpdateProductStatus(_ context.Context, id uint64, statu
 	}
 	product.Status = status
 	return nil
+}
+
+func (s *adminStoreStub) HasActiveAuctionByProduct(_ context.Context, productID uint64) (bool, error) {
+	for _, auction := range s.auctions {
+		if auction.ProductID != productID {
+			continue
+		}
+		switch auction.Status {
+		case "draft", "scheduled", "running", "sold":
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *adminStoreStub) UpdateProductStock(_ context.Context, productID uint64, delta int) error {
+	product, ok := s.products[productID]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	product.Stock += delta
+	if product.Stock < 0 {
+		product.Stock = 0
+	}
+	return nil
+}
+
+func (s *adminStoreStub) HasPendingPaymentOrder(_ context.Context, productID uint64) (bool, error) {
+	for _, order := range s.orders {
+		if order.ProductID == productID && order.Status == "pending_payment" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *adminStoreStub) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {

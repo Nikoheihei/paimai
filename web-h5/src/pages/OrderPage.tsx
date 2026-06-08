@@ -3,14 +3,14 @@
  * Tab 切换 + 真实地址选择 + 支付流程
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Order, Address } from '../api/client'
 import { payBuyerOrder, getBuyerOrder, listAddresses, listBuyerOrders } from '../api/client'
 import { formatPaymentCountdown, paymentDeadlineMs, remainingPaymentSeconds } from '../utils/paymentDeadline'
 
 function formatCents(c: number) { return (c / 100).toFixed(2) }
-function productName(order: Order) { return order.productName || `商品 #${order.productId}` }
-function sellerName(order: Order) { return order.sellerNickname || `商家 #${order.sellerId}` }
+function productName(order: Order) { return order.productName || '拍品' }
+function sellerName(order: Order) { return order.sellerNickname || '商家' }
 function paymentRemaining(order: Order, nowMs: number): number {
   if (order.status !== 'pending_payment') return 0
   return remainingPaymentSeconds(paymentDeadlineMs(order.createdAt), nowMs)
@@ -42,10 +42,12 @@ export default function OrderPage() {
   const [payLoading, setPayLoading] = useState(false)
   const [nowMs, setNowMs] = useState(Date.now())
 
-  const load = () => {
+  const load = useCallback(() => {
     listBuyerOrders().then(setOrders).catch(err => setMsg(err.message || '加载订单失败')).finally(() => setLoading(false))
-  }
-  useEffect(load, [])
+  }, [])
+  useEffect(() => {
+    load()
+  }, [load])
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000)
@@ -62,7 +64,17 @@ export default function OrderPage() {
     }
     window.addEventListener('order:refresh', handler)
     return () => window.removeEventListener('order:refresh', handler)
-  }, [selected?.id])
+  }, [load, selected?.id])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load()
+      if (selected?.id) {
+        getBuyerOrder(selected.id).then(setSelected).catch(() => {})
+      }
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [load, selected?.id])
 
   const filtered = activeTab === 'all' ? orders : orders.filter(o => o.status === activeTab)
 
@@ -137,7 +149,7 @@ export default function OrderPage() {
 
       {selected ? (
         <div className="panel">
-          <h3>订单 #{selected.id}</h3>
+          <h3>订单详情</h3>
           <div className="order-product-summary">
             {selected.productImage ? (
               <img className="order-product-thumb" src={selected.productImage} alt={productName(selected)} />
@@ -151,7 +163,6 @@ export default function OrderPage() {
             </div>
           </div>
           <div className="order-detail">
-            <div className="info-row"><span>竞拍</span><span>#{selected.auctionId}</span></div>
             <div className="info-row"><span>商品</span><span>{productName(selected)}</span></div>
             <div className="info-row"><span>下单商家</span><span>{sellerName(selected)}</span></div>
             <div className="info-row"><span>金额</span><span className="price">¥{formatCents(selected.finalPriceCents)}</span></div>
@@ -273,14 +284,15 @@ export default function OrderPage() {
                   </div>
                 </div>
                 <div className="order-card-row meta">
-                  <span>订单 #{o.id} · 竞拍 #{o.auctionId}</span>
+                  <span>下单时间</span>
                   <span>{new Date(o.createdAt).toLocaleString('zh-CN')}</span>
                 </div>
               </div>
             ))}
             {filtered.length === 0 && (
               <div className="empty-state-box">
-                <p>{activeTab === 'all' ? '暂无订单' : `暂无${statusLabel[activeTab]}订单`}</p>
+                <p>{activeTab === 'all' ? '当前账号暂无订单' : `当前账号暂无${statusLabel[activeTab]}订单`}</p>
+                <p className="sub">请确认正在使用拍下商品的账号</p>
               </div>
             )}
           </div>

@@ -10,8 +10,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Auction, RankingItem } from '../shared/types'
-import { getAuction as apiGetAuction, getRanking, getRoomAuctions as apiGetRoomAuctions, placeBid, payBuyerOrder, listBuyerOrders, type Order } from '../api/client'
-import { formatPaymentCountdown, paymentDeadlineMs, PAYMENT_WINDOW_SECONDS, remainingPaymentSeconds } from '../utils/paymentDeadline'
+import { getAuction as apiGetAuction, getRanking, getRoomAuctions as apiGetRoomAuctions, listBuyerOrders, payBuyerOrder, placeBid } from '../api/client'
+import { formatPaymentCountdown, PAYMENT_WINDOW_SECONDS, remainingPaymentSeconds } from '../utils/paymentDeadline'
 
 /** 将 API 返回的 Auction 转换为完整的 shared types Auction */
 function fetchAuction(id: number): Promise<Auction> {
@@ -75,6 +75,34 @@ function wsEventBuyerId(message: WsMessage): number | undefined {
   return data?.buyerId ?? data?.payload?.buyerId
 }
 
+function wsEventAmount(message: WsMessage): number | undefined {
+  const data = message.data as { amount?: number; price?: number; payload?: { amount?: number; price?: number } } | undefined
+  return data?.amount ?? data?.price ?? data?.payload?.amount ?? data?.payload?.price
+}
+
+function mergeRanking(prev: RankingItem[], userId: number, amountCents: number): RankingItem[] {
+  if (!userId || amountCents <= 0) return prev
+  const byUser = new Map(prev.map(item => [item.userId, item]))
+  byUser.set(userId, { rank: 0, userId, amountCents })
+  return Array.from(byUser.values())
+    .sort((a, b) => b.amountCents - a.amountCents || a.userId - b.userId)
+    .map((item, index) => ({ ...item, rank: index + 1 }))
+}
+
+function auctionPaymentDeadlineMs(auction: Auction): number {
+  const endedAtMs = new Date(auction.endAt).getTime()
+  const baseMs = Number.isFinite(endedAtMs) ? endedAtMs : Date.now()
+  return baseMs + PAYMENT_WINDOW_SECONDS * 1000
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+function auctionPaymentRemainingSeconds(auction: Auction): number {
+  return remainingPaymentSeconds(auctionPaymentDeadlineMs(auction))
+}
+
 export default function AuctionPanel({
   roomId, userId, wsMessage, connected,
   activeAuctionId, productName, productImage,
@@ -92,7 +120,6 @@ export default function AuctionPanel({
   const [extendHint, setExtendHint] = useState(false)
   const [showPayModal, setShowPayModal] = useState(false)
   const [payCountdown, setPayCountdown] = useState(PAYMENT_WINDOW_SECONDS)
-  const [payOrder, setPayOrder] = useState<Order | null>(null)
   const [payLoading, setPayLoading] = useState(false)
 
   const prevStatusRef = useRef<string>('')
@@ -130,6 +157,13 @@ export default function AuctionPanel({
     const t = wsMessage.type
 
     if (t === 'bid.accepted') {
+      const eventAuctionId = wsEventAuctionId(wsMessage)
+      if (eventAuctionId && eventAuctionId !== current.id) return
+      const eventBuyerId = wsEventBuyerId(wsMessage)
+      const eventAmount = wsEventAmount(wsMessage)
+      if (eventBuyerId && eventAmount) {
+        setRanking(prev => mergeRanking(prev, eventBuyerId, eventAmount))
+      }
       fetchAuction(current.id).then((updated: Auction) => {
         prevStatusRef.current = current.status; setCurrent(updated)
         setPriceAnim(true); setTimeout(() => setPriceAnim(false), 600)
@@ -137,7 +171,7 @@ export default function AuctionPanel({
           setExtendHint(true); setTimeout(() => setExtendHint(false), 3000)
         }
       })
-      getRanking(current.id, 10).then(setRanking)
+      window.setTimeout(() => getRanking(current.id, 10).then(setRanking), 120)
     }
 
     if (t === 'outbid' || t === 'auction.outbid') {
@@ -215,9 +249,10 @@ export default function AuctionPanel({
       if (res.accepted) {
         setBidStatus('ok')
         setBidMsg(res.sold ? '成交！' : res.extended ? '出价成功，时间延长' : '出价成功')
+        setRanking(prev => mergeRanking(prev, userId, res.currentPriceCents))
         setLastOutbid(false); setPriceAnim(true); setTimeout(()=>setPriceAnim(false),600)
         fetchAuction(current.id).then(setCurrent)
-        getRanking(current.id, 10).then(setRanking)
+        window.setTimeout(() => getRanking(current.id, 10).then(setRanking), 120)
         onBidSuccess?.()
       } else {
         setBidStatus('fail')
@@ -255,6 +290,9 @@ export default function AuctionPanel({
         if (payTimerRef.current) clearInterval(payTimerRef.current)
         payTimerRef.current = null
         payDeadlineRef.current = 0
+        setBidStatus('fail')
+        setBidMsg('支付已超时，不能继续支付')
+        window.dispatchEvent(new CustomEvent('order:refresh'))
       }
     }
     tick() // 立即计算一次
@@ -262,11 +300,6 @@ export default function AuctionPanel({
       payTimerRef.current = setInterval(tick, 1000)
     }
   }, [stopPayCountdown])
-
-  const loadPaymentOrder = useCallback(async (auctionId: number): Promise<Order | null> => {
-    const orders = await listBuyerOrders(auctionId)
-    return orders.find(order => order.auctionId === auctionId) || orders[0] || null
-  }, [])
 
   const handleCountdownEnd = useCallback(() => {
     if (!current) return
@@ -279,40 +312,78 @@ export default function AuctionPanel({
     // 不停止倒计时，后台继续
   }, [])
 
-  // 打开支付弹窗（从后台倒计时同步当前剩余时间）
-  const openPayModal = useCallback(async () => {
-    if (!current || paidAuctionIds.includes(current.id)) return
-    try {
-      const order = payOrder?.auctionId === current.id ? payOrder : await loadPaymentOrder(current.id)
-      if (!order) {
-        setBidStatus('fail')
-        setBidMsg('订单未生成，请稍后重试')
-        return
+  const syncMockPaymentToServer = useCallback(async () => {
+    if (!current || !selectedAddressId || !selectedAddress) return
+    if (auctionPaymentRemainingSeconds(current) <= 0) return
+    const addrSnapshot = `${selectedAddress.name} ${selectedAddress.phone} ${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail}`
+
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if (auctionPaymentRemainingSeconds(current) <= 0) return
+      try {
+        const orders = await listBuyerOrders(current.id)
+        const order = orders.find(item => item.auctionId === current.id) || orders[0]
+        if (order?.status === 'paid') {
+          window.dispatchEvent(new CustomEvent('order:refresh'))
+          return
+        }
+        if (order?.status === 'pending_payment') {
+          await payBuyerOrder(order.id, selectedAddressId, addrSnapshot)
+          window.dispatchEvent(new CustomEvent('order:refresh'))
+          return
+        }
+      } catch (err) {
+        console.warn('[payment] sync paid order failed', err)
       }
-      if (order.status === 'paid') {
-        setPayOrder(order)
-        onPaid?.(current.id)
-        setBidStatus('ok')
-        setBidMsg('支付成功！')
-        getRanking(current.id, 10).then(setRanking)
-        return
-      }
-      if (order.status === 'closed') {
-        setPayOrder(order)
-        stopPayCountdown()
-        setBidStatus('fail')
-        setBidMsg('支付超时，订单已关闭')
-        fetchAuction(current.id).then(setCurrent)
-        return
-      }
-      setPayOrder(order)
-      startPayCountdown(paymentDeadlineMs(order.createdAt))
-      setShowPayModal(true)
-    } catch (err: any) {
-      setBidStatus('fail')
-      setBidMsg(err.message || '加载订单失败')
+      await sleep(500)
     }
-  }, [current, loadPaymentOrder, onPaid, paidAuctionIds, payOrder, startPayCountdown, stopPayCountdown])
+    console.warn('[payment] paid locally, but no pending order was available to sync')
+  }, [current, selectedAddress, selectedAddressId])
+
+  const completeMockPayment = useCallback(() => {
+    if (!current) return
+    if (auctionPaymentRemainingSeconds(current) <= 0) {
+      setBidStatus('fail')
+      setBidMsg('支付已超时，不能继续支付')
+      setShowPayModal(false)
+      stopPayCountdown()
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      return
+    }
+    onPaid?.(current.id)
+    setBidStatus('ok')
+    setBidMsg('支付成功！')
+    setShowPayModal(false)
+    stopPayCountdown()
+    payTriggeredRef.current = current.id
+    window.dispatchEvent(new CustomEvent('order:refresh'))
+    void syncMockPaymentToServer()
+  }, [current, onPaid, stopPayCountdown, syncMockPaymentToServer])
+
+  // 当前 H5 支付为演示态：只校验地址，地址存在即直接成功。
+  const openPayModal = useCallback(() => {
+    if (!current || paidAuctionIds.includes(current.id)) return
+
+    if (payDeadlineRef.current === 0) {
+      startPayCountdown(auctionPaymentDeadlineMs(current))
+    }
+
+    if (auctionPaymentRemainingSeconds(current) <= 0) {
+      setShowPayModal(false)
+      setBidStatus('fail')
+      setBidMsg('支付已超时，不能继续支付')
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      return
+    }
+
+    if (!selectedAddressId || !selectedAddress) {
+      setShowPayModal(true)
+      setBidStatus('fail')
+      setBidMsg('请先选择收货地址')
+      return
+    }
+
+    completeMockPayment()
+  }, [completeMockPayment, current, paidAuctionIds, selectedAddress, selectedAddressId, startPayCountdown])
 
   const soldWinnerAuctionId = current?.status === 'sold' && current.winnerUserId === userId
     ? current.id
@@ -322,104 +393,36 @@ export default function AuctionPanel({
   // 成交后自动启动支付倒计时 + 弹出弹窗（每个成交竞拍只触发一次）
   useEffect(() => {
     if (!soldWinnerAuctionId || paidAuctionIds.includes(soldWinnerAuctionId)) return
-    if (payTriggeredRef.current === soldWinnerAuctionId && payOrder?.auctionId === soldWinnerAuctionId) return
+    if (payTriggeredRef.current === soldWinnerAuctionId) return
+    if (!current || current.id !== soldWinnerAuctionId) return
 
-    let cancelled = false
-    loadPaymentOrder(soldWinnerAuctionId)
-      .then(order => {
-        if (cancelled) return
-        if (!order) {
-          setBidStatus('fail')
-          setBidMsg('订单未生成，请稍后重试')
-          return
-        }
-        if (order.status === 'paid') {
-          setPayOrder(order)
-          payTriggeredRef.current = soldWinnerAuctionId
-          stopPayCountdown()
-          onPaid?.(soldWinnerAuctionId)
-          return
-        }
-        if (order.status === 'closed') {
-          setPayOrder(order)
-          payTriggeredRef.current = soldWinnerAuctionId
-          stopPayCountdown()
-          setShowPayModal(false)
-          setBidStatus('fail')
-          setBidMsg('支付超时，订单已关闭')
-          fetchAuction(soldWinnerAuctionId).then(setCurrent)
-          return
-        }
-        setPayOrder(order)
-        payTriggeredRef.current = soldWinnerAuctionId
-        startPayCountdown(paymentDeadlineMs(order.createdAt))
-        setShowPayModal(true)
-      })
-      .catch((err: any) => {
-        if (cancelled) return
-        setBidStatus('fail')
-        setBidMsg(err.message || '加载订单失败')
-      })
-
-    return () => { cancelled = true }
-  }, [loadPaymentOrder, onPaid, paidAuctionIds, payOrder?.auctionId, soldWinnerAuctionId, startPayCountdown, stopPayCountdown])
+    payTriggeredRef.current = soldWinnerAuctionId
+    startPayCountdown(auctionPaymentDeadlineMs(current))
+    setBidMsg('')
+    setShowPayModal(true)
+  }, [current, paidAuctionIds, soldWinnerAuctionId, startPayCountdown])
 
   // 组件卸载时清理
   useEffect(() => () => stopPayCountdown(), [stopPayCountdown])
 
-  const handlePay = async () => {
+  const handlePay = () => {
     if (!current) return
+    if (auctionPaymentRemainingSeconds(current) <= 0) {
+      setBidStatus('fail')
+      setBidMsg('支付已超时，不能继续支付')
+      setShowPayModal(false)
+      stopPayCountdown()
+      window.dispatchEvent(new CustomEvent('order:refresh'))
+      return
+    }
     if (!selectedAddressId || !selectedAddress) {
       setBidStatus('fail')
       setBidMsg('请先选择收货地址')
       return
     }
-    if (payCountdown === 0) {
-      setBidStatus('fail')
-      setBidMsg('支付已超时')
-      return
-    }
     setPayLoading(true)
-    try {
-      const order = payOrder?.auctionId === current.id ? payOrder : await loadPaymentOrder(current.id)
-      if (!order) {
-        setBidMsg('订单未生成，请稍后重试')
-        setPayLoading(false)
-        return
-      }
-      if (order.status === 'paid') {
-        setPayOrder(order)
-        onPaid?.(current.id)
-        setBidStatus('ok')
-        setBidMsg('支付成功！')
-        setShowPayModal(false)
-        stopPayCountdown()
-        getRanking(current.id, 10).then(setRanking)
-        return
-      }
-      const addrSnapshot = `${selectedAddress.name} ${selectedAddress.phone} ${selectedAddress.province}${selectedAddress.city}${selectedAddress.district}${selectedAddress.detail}`
-      const paidOrder = await payBuyerOrder(order.id, selectedAddressId ?? undefined, addrSnapshot)
-      setPayOrder(paidOrder)
-      onPaid?.(current.id)
-      setBidStatus('ok')
-      setBidMsg('支付成功！')
-      setShowPayModal(false)
-      stopPayCountdown()
-      payTriggeredRef.current = current.id
-      window.dispatchEvent(new CustomEvent('order:refresh'))
-      fetchAuction(current.id).then(setCurrent)
-      getRanking(current.id, 10).then(setRanking)
-    } catch (err: any) {
-      setBidMsg(err.message || '支付失败')
-      if (String(err.message || '').includes('timeout')) {
-        setShowPayModal(false)
-        stopPayCountdown()
-        fetchAuction(current.id).then(setCurrent)
-        window.dispatchEvent(new CustomEvent('order:refresh'))
-      }
-    } finally {
-      setPayLoading(false)
-    }
+    completeMockPayment()
+    setPayLoading(false)
   }
 
   if (!current) {
@@ -432,6 +435,9 @@ export default function AuctionPanel({
   const isSold = current.status === 'sold'
   const isRunning = current.status === 'running'
   const isScheduled = current.status === 'scheduled'
+  const auctionCountdownTarget = isScheduled ? current.startAt : current.endAt
+  const auctionCountdownLabel = isScheduled ? '距开拍' : '距结束'
+  const paymentExpired = isSold && current.winnerUserId === userId && auctionPaymentRemainingSeconds(current) <= 0
 
   return (
     <div className="auction-panel">
@@ -468,8 +474,13 @@ export default function AuctionPanel({
 
       {/* 倒计时 */}
       {(isRunning || isScheduled) && (
-        <Countdown endAt={current.endAt}
-          onEnd={handleCountdownEnd} />
+        <div className={`ap-countdown-bar ${isScheduled ? 'scheduled' : 'running'}`}>
+          <span>{auctionCountdownLabel}</span>
+          <Countdown
+            endAt={auctionCountdownTarget}
+            onEnd={handleCountdownEnd}
+          />
+        </div>
       )}
 
       {/* 价格区域 */}
@@ -511,12 +522,18 @@ export default function AuctionPanel({
             <button
               className="bid-submit-btn instant-bid-btn"
               style={{ marginTop: 10, width: '100%' }}
-              disabled={isCurrentPaid}
+              disabled={isCurrentPaid || payLoading || paymentExpired}
               onClick={openPayModal}
             >
-              {isCurrentPaid ? '支付成功' : '立即支付'}
+              {isCurrentPaid ? '支付成功' : paymentExpired ? '支付超时' : payLoading ? '支付中...' : '立即支付'}
             </button>
           )}
+        </div>
+      )}
+
+      {!isRunning && bidMsg && (
+        <div className={`bid-status-msg ${bidStatus}`} style={{ marginTop: 10 }}>
+          {bidMsg}
         </div>
       )}
 
@@ -558,12 +575,26 @@ export default function AuctionPanel({
                   未选择收货地址，请在右侧地址栏中选择
                 </div>
               )}
+              {bidMsg && bidStatus === 'fail' && (
+                <div style={{
+                  marginTop: 10,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  background: 'rgba(255,71,87,.08)',
+                  border: '1px solid rgba(255,71,87,.16)',
+                  color: '#ff6b7a',
+                  fontSize: 12,
+                  textAlign: 'center',
+                }}>
+                  {bidMsg}
+                </div>
+              )}
               <div style={{ textAlign: 'center', fontSize: 14, color: '#ff4757', fontWeight: 700, marginTop: 10 }}>
                 ⏰ 支付倒计时: {formatPaymentCountdown(payCountdown)}
               </div>
-              {payCountdown === 0 && (
+              {paymentExpired && (
                 <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>
-                  订单已关闭
+                  支付已超时，不能继续支付
                 </div>
               )}
             </div>
@@ -571,8 +602,20 @@ export default function AuctionPanel({
               <button className="modal-btn modal-cancel" onClick={closePayModal}>稍后再付</button>
               <button
                 className="modal-btn modal-confirm"
-                disabled={payLoading || payCountdown === 0 || !selectedAddressId || !selectedAddress}
-                onClick={handlePay}
+                disabled={payLoading || paymentExpired}
+                onClick={() => {
+                  if (paymentExpired) {
+                    setBidStatus('fail')
+                    setBidMsg('支付已超时，不能继续支付')
+                    return
+                  }
+                  if (!selectedAddressId || !selectedAddress) {
+                    setBidStatus('fail')
+                    setBidMsg('请先选择收货地址')
+                    return
+                  }
+                  handlePay()
+                }}
               >
                 {payLoading ? '支付中...' : '立即支付'}
               </button>
@@ -616,7 +659,7 @@ export default function AuctionPanel({
           width: '100%',
           padding: '10px',
           marginTop: 10,
-          background: 'rgba(255,255,255,0.08)',
+          background: 'rgba(0,0,0,0.04)',
           border: '1px solid var(--glass-border)',
           borderRadius: 10,
           color: 'var(--text-muted)',

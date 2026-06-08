@@ -63,6 +63,7 @@ type ProductInput struct {
 	Name        string `json:"name"`
 	ImageURL    string `json:"imageUrl"`
 	Description string `json:"description"`
+	Stock       int    `json:"stock"`
 }
 
 // AuctionInput 是创建竞拍的输入参数。
@@ -118,13 +119,21 @@ func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input
 	if input.Name == "" {
 		return nil, fmt.Errorf("%w: product name is required", ErrInvalidInput)
 	}
+	if input.Stock < 0 {
+		return nil, fmt.Errorf("%w: stock cannot be negative", ErrInvalidInput)
+	}
+	stock := input.Stock
+	if stock == 0 {
+		stock = 1
+	}
 
 	product := &model.Product{
 		SellerID:    sellerID,
 		Name:        input.Name,
 		ImageURL:    strings.TrimSpace(input.ImageURL),
 		Description: strings.TrimSpace(input.Description),
-		Status:      ProductStatusAvailable,
+		Status:      "available",
+		Stock:       stock,
 	}
 
 	// 使用事务：创建商品 + 写入 Outbox 事件
@@ -143,6 +152,7 @@ func (s *AdminService) CreateProduct(ctx context.Context, sellerID uint64, input
 			"name":        product.Name,
 			"imageUrl":    product.ImageURL,
 			"description": product.Description,
+			"stock":       product.Stock,
 		})
 		return tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
 			EventType: "product.created",
@@ -206,11 +216,9 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 			}
 			return err
 		}
-		if product.Status == "" {
-			product.Status = ProductStatusAvailable
-		}
-		if product.Status != ProductStatusAvailable {
-			return fmt.Errorf("%w: product is %s", ErrInvalidInput, product.Status)
+		// 库存不足
+		if product.Stock <= 0 {
+			return fmt.Errorf("%w: 商品库存不足", ErrInvalidInput)
 		}
 		// 同一商品不能同时存在多个未完成竞拍（draft/scheduled/running/sold）
 		hasActive, err := tx.HasActiveAuctionByProduct(ctx, input.ProductID)
@@ -221,6 +229,10 @@ func (s *AdminService) CreateAuction(ctx context.Context, input AuctionInput) (*
 			return fmt.Errorf("%w: 该商品已有未完成竞拍，请先结算或取消", ErrInvalidInput)
 		}
 		if err := tx.CreateAuction(ctx, auction); err != nil {
+			return err
+		}
+		// 创建上架计划：库存 -1
+		if err := tx.UpdateProductStock(ctx, product.ID, -1); err != nil {
 			return err
 		}
 		if err := tx.UpdateProductStatus(ctx, product.ID, ProductStatusLocked); err != nil {
@@ -394,6 +406,10 @@ func (s *AdminService) transitionAuction(ctx context.Context, id uint64, event s
 			return err
 		}
 		if event == statemachine.EventCancel {
+			// 取消上架计划：库存 +1
+			if err := tx.UpdateProductStock(ctx, a.ProductID, 1); err != nil {
+				return err
+			}
 			if err := tx.UpdateProductStatus(ctx, a.ProductID, ProductStatusAvailable); err != nil {
 				return err
 			}
@@ -639,18 +655,30 @@ func (s *AdminService) RelistProduct(ctx context.Context, sellerID uint64, produ
 	if sellerID != 0 && product.SellerID != sellerID {
 		return nil, ErrUnauthorized
 	}
-	if product.Status == "" {
-		product.Status = ProductStatusAvailable
+	if product.Stock <= 0 {
+		return nil, fmt.Errorf("%w: 商品库存不足", ErrInvalidInput)
 	}
-	if product.Status != ProductStatusAvailable {
-		return nil, fmt.Errorf("%w: product is %s", ErrInvalidInput, product.Status)
+	// 检查是否存在未完成竞拍或待支付订单
+	hasActive, err := s.store.HasActiveAuctionByProduct(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	if hasActive {
+		return nil, fmt.Errorf("%w: 该商品已有未完成竞拍", ErrInvalidInput)
+	}
+	hasPending, err := s.store.HasPendingPaymentOrder(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	if hasPending {
+		return nil, fmt.Errorf("%w: 该商品存在待支付订单，请等待支付完成或超时", ErrInvalidInput)
 	}
 	input.ProductID = productID
 	return s.CreateAuction(ctx, input)
 }
 
 // OfflineProduct 将商品下架。
-// 如果商品存在未完成竞拍（draft/scheduled/running/sold），禁止下架，必须先结算或取消竞拍。
+// 商品 stock 必须 > 0（库存全部回收），且不存在未完成竞拍或待支付订单。
 func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, productID uint64) (*model.Product, error) {
 	var product *model.Product
 	if err := s.store.WithTx(ctx, func(tx repository.AdminStore) error {
@@ -664,7 +692,9 @@ func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, prod
 		if sellerID != 0 && p.SellerID != sellerID {
 			return ErrUnauthorized
 		}
-		// 存在任何未完成竞拍（draft/scheduled/running/sold）时禁止下架
+		if p.Stock <= 0 {
+			return fmt.Errorf("%w: 库存未全部回收，无法下架", ErrInvalidInput)
+		}
 		hasActive, err := tx.HasActiveAuctionByProduct(ctx, productID)
 		if err != nil {
 			return err
@@ -672,12 +702,19 @@ func (s *AdminService) OfflineProduct(ctx context.Context, sellerID uint64, prod
 		if hasActive {
 			return fmt.Errorf("%w: 该商品存在未完成竞拍，请先结算或取消后再下架", ErrInvalidInput)
 		}
-		if p.Status == ProductStatusOffline {
+		hasPending, err := tx.HasPendingPaymentOrder(ctx, productID)
+		if err != nil {
+			return err
+		}
+		if hasPending {
+			return fmt.Errorf("%w: 该商品存在待支付订单，请等待支付完成或超时", ErrInvalidInput)
+		}
+		if p.Status == "offline" {
 			product = p
 			return nil
 		}
-		p.Status = ProductStatusOffline
-		if err := tx.UpdateProductStatus(ctx, p.ID, ProductStatusOffline); err != nil {
+		p.Status = "offline"
+		if err := tx.UpdateProductStatus(ctx, p.ID, "offline"); err != nil {
 			return err
 		}
 		if err := createProductEvent(ctx, tx, "product.offline", p); err != nil {

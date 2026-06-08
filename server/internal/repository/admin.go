@@ -64,6 +64,10 @@ type AdminStore interface {
 
 	// 竞拍活跃状态检查
 	HasActiveAuctionByProduct(ctx context.Context, productID uint64) (bool, error)
+
+	// 库存管理
+	UpdateProductStock(ctx context.Context, productID uint64, delta int) error
+	HasPendingPaymentOrder(ctx context.Context, productID uint64) (bool, error)
 }
 
 // GormAdminStore 是基于 GORM 的 AdminStore 实现。
@@ -141,6 +145,21 @@ func (s *txGormAdminStore) HasActiveAuctionByProduct(ctx context.Context, produc
 	err := s.db.WithContext(ctx).Model(&model.Auction{}).
 		Where("product_id = ? AND status IN ?", productID,
 			[]string{string(statemachine.StateDraft), string(statemachine.StateScheduled), string(statemachine.StateRunning), string(statemachine.StateSold)}).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *txGormAdminStore) UpdateProductStock(ctx context.Context, productID uint64, delta int) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).
+		Where("id = ?", productID).
+		Update("stock", gorm.Expr("stock + ?", delta)).Error
+}
+
+func (s *txGormAdminStore) HasPendingPaymentOrder(ctx context.Context, productID uint64) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&model.Order{}).
+		Joins("JOIN auctions ON orders.auction_id = auctions.id").
+		Where("auctions.product_id = ? AND orders.status = ?", productID, "pending_payment").
 		Count(&count).Error
 	return count > 0, err
 }
@@ -612,6 +631,21 @@ func (s *GormAdminStore) HasActiveAuctionByProduct(ctx context.Context, productI
 	err := s.db.WithContext(ctx).Model(&model.Auction{}).
 		Where("product_id = ? AND status IN ?", productID,
 			[]string{string(statemachine.StateDraft), string(statemachine.StateScheduled), string(statemachine.StateRunning), string(statemachine.StateSold)}).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *GormAdminStore) UpdateProductStock(ctx context.Context, productID uint64, delta int) error {
+	return s.db.WithContext(ctx).Model(&model.Product{}).
+		Where("id = ?", productID).
+		Update("stock", gorm.Expr("stock + ?", delta)).Error
+}
+
+func (s *GormAdminStore) HasPendingPaymentOrder(ctx context.Context, productID uint64) (bool, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&model.Order{}).
+		Joins("JOIN auctions ON orders.auction_id = auctions.id").
+		Where("auctions.product_id = ? AND orders.status = ?", productID, "pending_payment").
 		Count(&count).Error
 	return count > 0, err
 }

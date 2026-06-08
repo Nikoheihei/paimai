@@ -337,9 +337,12 @@ html, body {
 .auction-panel {
   position: relative; margin: 12px 16px;
   border-radius: var(--radius-lg);
-  background: var(--glass-strong);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: #ffffff;
+  --text-primary: #000000;
+  --text-secondary: rgba(0,0,0,0.65);
+  --text-muted: rgba(0,0,0,0.4);
+  --glass-border: rgba(0,0,0,0.1);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15);
   border: 1px solid var(--glass-border);
   padding: 20px 18px; overflow: hidden;
   z-index: 20; animation: fadeInUp .5s ease .1s both;
@@ -380,7 +383,7 @@ html, body {
 }
 .ap-info-item {
   text-align: center; padding: 10px 6px;
-  background: rgba(255,255,255,.04); border-radius: var(--radius-sm);
+  background: rgba(0,0,0,.04); border-radius: var(--radius-sm);
   min-width: 0;
 }
 .ap-info-label { font-size: 11px; color: var(--text-muted); display: block; white-space: nowrap; }
@@ -390,6 +393,34 @@ html, body {
 .countdown-section {
   display: flex; align-items: center; justify-content: center;
   gap: 6px; flex-direction: column; padding: 10px 0 6px;
+}
+.countdown {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.countdown.urgent {
+  color: #ff4757;
+}
+.ap-countdown-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 10px 12px; margin: 4px 0 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(254,44,85,.08);
+  border: 1px solid rgba(254,44,85,.16);
+}
+.ap-countdown-bar > span {
+  color: var(--text-secondary); font-size: 12px; font-weight: 700;
+  white-space: nowrap;
+}
+.ap-countdown-bar .countdown {
+  color: var(--primary); font-size: 20px; font-weight: 800;
+}
+.ap-countdown-bar.scheduled {
+  background: rgba(255,200,0,.1);
+  border-color: rgba(255,200,0,.22);
+}
+.ap-countdown-bar.scheduled .countdown {
+  color: var(--gold);
 }
 .countdown-urgent { animation: urgentFlash .6s ease infinite; }
 .countdown-text-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
@@ -419,7 +450,7 @@ html, body {
   margin-bottom: 12px;
 }
 .quick-bid-btn {
-  background: rgba(255,255,255,.06);
+  background: rgba(0,0,0,.04);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm); padding: 12px 4px;
   color: var(--text-primary); font-size: 14px; font-weight: 700;
@@ -436,7 +467,7 @@ html, body {
   white-space: nowrap;
 }
 .bid-input-row input {
-  flex: 1; background: rgba(0,0,0,.3);
+  flex: 1; background: rgba(0,0,0,.04);
   border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
   padding: 12px 14px; color: var(--text-primary);
   font-size: 18px; font-weight: 700; outline: none;
@@ -567,7 +598,7 @@ html, body {
   backdrop-filter: blur(12px); border-radius: 8px 0 0 8px;
   display: flex; align-items: center; justify-content: center;
   color: var(--primary); font-size: 13px; cursor: pointer;
-  writing-mode: vertical-lr; box-shadow: -2px 0 10px rgba(0,0,0,.3);
+  box-shadow: -2px 0 10px rgba(0,0,0,.3);
   border: 1px solid var(--glass-border); border-right: none;
   transition: color .15s;
   white-space: nowrap;
@@ -617,6 +648,25 @@ html, body {
   font-size: 14px; font-weight: 800; color: var(--primary);
   font-style: italic; margin-top: 2px;
   white-space: nowrap;
+}
+.pfp-item-timer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; margin-top: 7px; padding: 5px 7px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  min-width: 0;
+}
+.pfp-item-timer > span {
+  flex: 0 0 auto; font-size: 10px; font-weight: 700;
+  color: var(--text-muted); white-space: nowrap;
+}
+.pfp-item-timer .countdown {
+  flex: 1; min-width: 0; text-align: right;
+  font-size: 12px; font-weight: 800; color: #fff;
+}
+.pfp-item-timer.scheduled .countdown {
+  color: var(--gold);
 }
 .pfp-empty {
   text-align: center; color: var(--text-muted);
@@ -924,6 +974,19 @@ html, body {
   box-shadow: 0 2px 10px rgba(254,44,85,.25);
 }
 .h5-nav a:active { transform: scale(.96); }
+.h5-user-chip {
+  align-self: center;
+  max-width: 72px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.06);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ================================================================
    SECTION 12: 通用组件样式

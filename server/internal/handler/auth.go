@@ -1,12 +1,16 @@
 package handler
 
 import (
-	"github.com/gin-gonic/gin"
-
+	"errors"
 	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"paimai/internal/model"
 	"paimai/internal/service"
 	"paimai/pkg/response"
-	"sync"
 )
 
 // AuthHandler 负责用户认证的 HTTP 协议适配。
@@ -31,73 +35,68 @@ func RegisterAuthMeRoute(r *gin.Engine, authService *service.AuthService) {
 }
 
 // RegisterAddressRoutes 注册收货地址路由（挂在鉴权中间件之后）。
-func RegisterAddressRoutes(r gin.IRouter) {
-	r.GET("/addresses", listAddresses)
-	r.POST("/addresses", createAddress)
-	r.PUT("/addresses/:id", updateAddress)
-	r.DELETE("/addresses/:id", deleteAddress)
+func RegisterAddressRoutes(r gin.IRouter, database *gorm.DB) {
+	h := &AddressHandler{db: database}
+	r.GET("/addresses", h.listAddresses)
+	r.POST("/addresses", h.createAddress)
+	r.PUT("/addresses/:id", h.updateAddress)
+	r.DELETE("/addresses/:id", h.deleteAddress)
 }
 
-type Address struct {
-	ID        uint64 `json:"id"`
-	UserID    uint64 `json:"userId"`
-	Name      string `json:"name"`
-	Phone     string `json:"phone"`
-	Province  string `json:"province"`
-	City      string `json:"city"`
-	District  string `json:"district"`
-	Detail    string `json:"detail"`
-	IsDefault bool   `json:"isDefault"`
+type AddressHandler struct {
+	db *gorm.DB
 }
 
-var addressStore sync.Map // userID -> []Address
-var addressIDCounter uint64
-var addressMu sync.Mutex
-
-func listAddresses(c *gin.Context) {
+func (h *AddressHandler) listAddresses(c *gin.Context) {
 	userID := mustGetUserID(c)
 	if userID == 0 {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
 		return
 	}
-	result := make([]Address, 0)
-	if raw, ok := addressStore.Load(userID); ok {
-		result = raw.([]Address)
+	var result []model.Address
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("user_id = ?", userID).
+		Order("is_default DESC, id DESC").
+		Find(&result).Error; err != nil {
+		response.Error(c, http.StatusInternalServerError, 500, err.Error())
+		return
 	}
 	response.Success(c, result)
 }
 
-func createAddress(c *gin.Context) {
+func (h *AddressHandler) createAddress(c *gin.Context) {
 	userID := mustGetUserID(c)
 	if userID == 0 {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
 		return
 	}
-	var input Address
+	var input model.Address
 	if !bindJSON(c, &input) {
 		return
 	}
-	addressMu.Lock()
-	addressIDCounter++
-	input.ID = addressIDCounter
-	addressMu.Unlock()
+	normalizeAddress(&input)
 	input.UserID = userID
+	if err := validateAddress(input); err != nil {
+		response.Error(c, http.StatusBadRequest, 400, err.Error())
+		return
+	}
 
-	var list []Address
-	if raw, ok := addressStore.Load(userID); ok {
-		list = raw.([]Address)
-	}
-	if input.IsDefault {
-		for i := range list {
-			list[i].IsDefault = false
+	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if input.IsDefault {
+			if err := tx.Model(&model.Address{}).Where("user_id = ?", userID).Update("is_default", false).Error; err != nil {
+				return err
+			}
 		}
+		return tx.Create(&input).Error
+	})
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, 500, err.Error())
+		return
 	}
-	list = append(list, input)
-	addressStore.Store(userID, list)
 	response.Success(c, input)
 }
 
-func updateAddress(c *gin.Context) {
+func (h *AddressHandler) updateAddress(c *gin.Context) {
 	userID := mustGetUserID(c)
 	if userID == 0 {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
@@ -107,44 +106,47 @@ func updateAddress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var input Address
+	var input model.Address
 	if !bindJSON(c, &input) {
 		return
 	}
-	raw, ok := addressStore.Load(userID)
-	if !ok {
-		response.Error(c, http.StatusNotFound, 404, "address not found")
+	normalizeAddress(&input)
+	if err := validateAddress(input); err != nil {
+		response.Error(c, http.StatusBadRequest, 400, err.Error())
 		return
 	}
-	list := raw.([]Address)
-	found := false
-	for i, a := range list {
-		if a.ID == id {
-			list[i].Name = input.Name
-			list[i].Phone = input.Phone
-			list[i].Province = input.Province
-			list[i].City = input.City
-			list[i].District = input.District
-			list[i].Detail = input.Detail
-			if input.IsDefault {
-				for j := range list {
-					list[j].IsDefault = false
-				}
-				list[i].IsDefault = true
-			}
-			found = true
-			response.Success(c, list[i])
-			break
+
+	var updated model.Address
+	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ? AND user_id = ?", id, userID).First(&updated).Error; err != nil {
+			return err
 		}
-	}
-	if !found {
+		updated.Name = input.Name
+		updated.Phone = input.Phone
+		updated.Province = input.Province
+		updated.City = input.City
+		updated.District = input.District
+		updated.Detail = input.Detail
+		updated.IsDefault = input.IsDefault
+		if input.IsDefault {
+			if err := tx.Model(&model.Address{}).Where("user_id = ? AND id <> ?", userID, id).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Save(&updated).Error
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		response.Error(c, http.StatusNotFound, 404, "address not found")
 		return
 	}
-	addressStore.Store(userID, list)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	response.Success(c, updated)
 }
 
-func deleteAddress(c *gin.Context) {
+func (h *AddressHandler) deleteAddress(c *gin.Context) {
 	userID := mustGetUserID(c)
 	if userID == 0 {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
@@ -154,20 +156,37 @@ func deleteAddress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	raw, ok := addressStore.Load(userID)
-	if !ok {
-		response.Success(c, nil)
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("id = ? AND user_id = ?", id, userID).
+		Delete(&model.Address{}).Error; err != nil {
+		response.Error(c, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	list := raw.([]Address)
-	newList := make([]Address, 0, len(list))
-	for _, a := range list {
-		if a.ID != id {
-			newList = append(newList, a)
-		}
-	}
-	addressStore.Store(userID, newList)
 	response.Success(c, nil)
+}
+
+func normalizeAddress(address *model.Address) {
+	address.ID = 0
+	address.UserID = 0
+	address.Name = strings.TrimSpace(address.Name)
+	address.Phone = strings.TrimSpace(address.Phone)
+	address.Province = strings.TrimSpace(address.Province)
+	address.City = strings.TrimSpace(address.City)
+	address.District = strings.TrimSpace(address.District)
+	address.Detail = strings.TrimSpace(address.Detail)
+}
+
+func validateAddress(address model.Address) error {
+	if address.Name == "" {
+		return errors.New("收货人不能为空")
+	}
+	if address.Phone == "" {
+		return errors.New("手机号不能为空")
+	}
+	if address.Detail == "" {
+		return errors.New("详细地址不能为空")
+	}
+	return nil
 }
 
 // register 处理用户注册请求。

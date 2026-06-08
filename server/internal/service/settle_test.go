@@ -72,6 +72,7 @@ func TestSettleAuctionReserveNotMet(t *testing.T) {
 	svc, store := newSettleTestHarness()
 	winner := uint64(42)
 	reserve := int64(5000)
+	ensureProduct(store, 1, ProductStatusLocked)
 	auction := &model.Auction{
 		RoomID:            1,
 		ProductID:         1,
@@ -128,6 +129,42 @@ func TestSettleAuctionIdempotent(t *testing.T) {
 	}
 	if result2.OrderID == nil || *result2.OrderID != *result1.OrderID {
 		t.Fatal("idempotent settle should return same order")
+	}
+}
+
+// TestSettleSoldAuctionWithoutOrderRepairsOrder 验证触顶成交先写 sold 时，后续结算会补齐订单。
+func TestSettleSoldAuctionWithoutOrderRepairsOrder(t *testing.T) {
+	svc, store := newSettleTestHarness()
+	winner := uint64(42)
+	auctionID := seedRunningAuction(store, &winner, nil)
+	auction, err := store.GetAuction(context.Background(), auctionID)
+	if err != nil {
+		t.Fatalf("auction not found: %v", err)
+	}
+	auction.Status = string(statemachine.StateSold)
+	if err := store.UpdateAuction(context.Background(), auction); err != nil {
+		t.Fatalf("set auction sold: %v", err)
+	}
+
+	result, err := svc.SettleAuction(context.Background(), auctionID)
+	if err != nil {
+		t.Fatalf("settle sold auction failed: %v", err)
+	}
+	if !result.Settled {
+		t.Fatal("expected repair settle=true")
+	}
+	if result.OrderID == nil {
+		t.Fatal("expected repaired order ID")
+	}
+	order, err := store.GetOrderByAuction(context.Background(), auctionID)
+	if err != nil {
+		t.Fatalf("expected repaired order: %v", err)
+	}
+	if order.Status != "pending_payment" {
+		t.Fatalf("expected pending_payment, got %s", order.Status)
+	}
+	if !hasOutboxEvent(store, "order.created") {
+		t.Fatal("expected order.created outbox event")
 	}
 }
 
@@ -503,6 +540,7 @@ func ensureProduct(store *adminStoreStub, id uint64, status string) {
 		SellerID: 100,
 		Name:     "测试商品",
 		Status:   status,
+		Stock:    0,
 	}
 	if store.nextProductID <= id {
 		store.nextProductID = id + 1

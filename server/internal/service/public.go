@@ -172,7 +172,7 @@ func (s *PublicService) GetRanking(ctx context.Context, auctionID uint64, limit 
 	}
 	if s.redis != nil && s.redis.Master != nil {
 		items, err := s.rankingFromRedis(ctx, auctionID, limit)
-		if err == nil {
+		if err == nil && len(items) > 0 {
 			// 按金额降序排序后分配 Rank（不依赖 Redis 返回顺序）
 			sortRankingItems(items)
 			return items, nil
@@ -276,6 +276,9 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 
 		newEndAt := auction.EndAt
 		extended := false
+		if sold {
+			newEndAt = now
+		}
 		if !sold && auction.Mode == "extension" && auction.ExtendThresholdSec > 0 {
 			remaining := auction.EndAt.Sub(now)
 			if remaining <= time.Duration(auction.ExtendThresholdSec)*time.Second {

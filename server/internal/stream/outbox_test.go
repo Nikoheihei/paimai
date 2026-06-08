@@ -93,6 +93,15 @@ func (s *mockAdminStore) UpdateProduct(_ context.Context, product *model.Product
 func (s *mockAdminStore) UpdateProductStatus(_ context.Context, id uint64, status string) error {
 	return nil
 }
+func (s *mockAdminStore) HasActiveAuctionByProduct(_ context.Context, productID uint64) (bool, error) {
+	return false, nil
+}
+func (s *mockAdminStore) UpdateProductStock(_ context.Context, productID uint64, delta int) error {
+	return nil
+}
+func (s *mockAdminStore) HasPendingPaymentOrder(_ context.Context, productID uint64) (bool, error) {
+	return false, nil
+}
 func (s *mockAdminStore) ListAuctionBids(_ context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	return nil, nil
 }

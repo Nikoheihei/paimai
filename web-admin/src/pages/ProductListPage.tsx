@@ -14,6 +14,7 @@ export default function ProductListPage() {
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [imageUrl, setImageUrl] = useState('')
+  const [stock, setStock] = useState('1')
 
   const load = () => { listProducts().then(setProducts).catch(() => {}) }
   useEffect(load, [])
@@ -22,12 +23,13 @@ export default function ProductListPage() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const resetForm = () => { setName(''); setDesc(''); setImageUrl(''); setEditing(null) }
+  const resetForm = () => { setName(''); setDesc(''); setImageUrl(''); setStock('1'); setEditing(null) }
 
   const handleCreate = async () => {
     if (!name.trim()) { setMsg('请输入商品名称'); return }
+    const stockValue = Math.max(1, parseInt(stock, 10) || 1)
     try {
-      await createProduct(name.trim(), imageUrl || '', desc.trim())
+      await createProduct(name.trim(), imageUrl || '', desc.trim(), stockValue)
       setMsg('商品已添加'); setShowCreate(false); resetForm(); load()
     } catch (err: any) { setMsg(err.message) }
   }
@@ -86,6 +88,10 @@ export default function ProductListPage() {
               <label>商品图片</label>
               <ImageUploader value={imageUrl} onChange={setImageUrl} placeholder="点击或拖拽上传" />
             </div>
+            <div className="field">
+              <label>库存 *</label>
+              <input type="number" min="1" step="1" value={stock} onChange={e => setStock(e.target.value)} required />
+            </div>
           </div>
           <div className="field">
             <label>描述</label>
@@ -120,6 +126,7 @@ export default function ProductListPage() {
               <th>缩略图</th>
               <th>名称</th>
               <th>描述</th>
+              <th>库存</th>
               <th>状态</th>
               <th>创建时间</th>
               <th>操作</th>
@@ -136,6 +143,7 @@ export default function ProductListPage() {
                 </td>
                 <td><strong>{p.name}</strong><br /><span className="meta">ID: #{p.id}</span></td>
                 <td className="desc-cell">{p.description || '-'}</td>
+                <td><strong>{p.stock ?? 0}</strong></td>
                 <td>{productStatusBadge(p.status)}</td>
                 <td>{new Date(p.createdAt).toLocaleDateString('zh-CN')}</td>
                 <td>

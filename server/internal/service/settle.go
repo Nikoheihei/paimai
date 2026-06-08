@@ -72,13 +72,12 @@ func (s *SettleService) SettleAuction(ctx context.Context, auctionID uint64) (*S
 				FinalPriceCents: auction.CurrentPriceCents,
 			}, nil
 		}
-		// 有 sold 状态但没有订单（数据异常），仅返回幂等结果，不重复生成
-		return &SettleResult{
-			AuctionID:       auctionID,
-			Settled:         false,
-			Status:          auction.Status,
-			FinalPriceCents: auction.CurrentPriceCents,
-		}, nil
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		// 触顶成交时出价流程会先把 auction 置为 sold，再异步结算生成订单。
+		// sold 但缺订单不是终态，应补齐 pending_payment 订单，避免前端显示成交但订单页为空。
+		return s.createOrderForSoldAuction(ctx, auction)
 	}
 	if auction.Status == string(statemachine.StateFailed) ||
 		auction.Status == string(statemachine.StateCancelled) ||
@@ -105,10 +104,13 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 	if err := s.adminStore.WithTx(ctx, func(tx repository.AdminStore) error {
 		now := s.now()
 
-		// 无人出价 → 流拍
+		// 无人出价 → 流拍，库存 +1
 		if auction.WinnerUserID == nil {
 			auction.Status = string(statemachine.StateFailed)
 			if err := tx.UpdateAuction(ctx, auction); err != nil {
+				return err
+			}
+			if err := tx.UpdateProductStock(ctx, auction.ProductID, 1); err != nil {
 				return err
 			}
 			if err := tx.UpdateProductStatus(ctx, auction.ProductID, ProductStatusAvailable); err != nil {
@@ -123,10 +125,13 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 			return nil
 		}
 
-		// 保留价未达到 → 流拍
+		// 保留价未达到 → 流拍，库存 +1
 		if auction.ReservePriceCents != nil && auction.CurrentPriceCents < *auction.ReservePriceCents {
 			auction.Status = string(statemachine.StateFailed)
 			if err := tx.UpdateAuction(ctx, auction); err != nil {
+				return err
+			}
+			if err := tx.UpdateProductStock(ctx, auction.ProductID, 1); err != nil {
 				return err
 			}
 			if err := tx.UpdateProductStatus(ctx, auction.ProductID, ProductStatusAvailable); err != nil {
@@ -147,38 +152,8 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 			return err
 		}
 
-		room, roomErr := tx.GetRoom(ctx, auction.RoomID)
-		if roomErr != nil {
-			return fmt.Errorf("获取直播间信息失败: %w", roomErr)
-		}
-		order := &model.Order{
-			AuctionID:       auction.ID,
-			ProductID:       auction.ProductID,
-			BuyerID:         *auction.WinnerUserID,
-			SellerID:        room.SellerID,
-			FinalPriceCents: auction.CurrentPriceCents,
-			Status:          "pending_payment",
-			CreatedAt:       now,
-		}
-		if err := tx.CreateOrder(ctx, order); err != nil {
-			return err
-		}
-
-		// 写入 Outbox 事件，通知前端刷新订单
-		eventPayload, _ := json.Marshal(map[string]interface{}{
-			"type":      "order.created",
-			"auctionId": auction.ID,
-			"orderId":   order.ID,
-			"buyerId":   order.BuyerID,
-			"sellerId":  order.SellerID,
-			"roomId":    auction.RoomID,
-		})
-		if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
-			EventType: "order.created",
-			Payload:   string(eventPayload),
-			Status:    "pending",
-			EventUUID: fmt.Sprintf("order-%d-%d", auction.ID, order.ID),
-		}); err != nil {
+		order, err := createPendingOrderForAuctionTx(ctx, tx, auction, now)
+		if err != nil {
 			return err
 		}
 
@@ -194,6 +169,89 @@ func (s *SettleService) doExecuteSettle(ctx context.Context, auction *model.Auct
 		return nil, err
 	}
 	return result, nil
+}
+
+func (s *SettleService) createOrderForSoldAuction(ctx context.Context, auction *model.Auction) (*SettleResult, error) {
+	var result *SettleResult
+	if err := s.adminStore.WithTx(ctx, func(tx repository.AdminStore) error {
+		current, err := tx.GetAuction(ctx, auction.ID)
+		if err != nil {
+			return err
+		}
+		if current.Status != string(statemachine.StateSold) {
+			return fmt.Errorf("%w: 竞拍当前状态不是 sold: %s", ErrInvalidTransition, current.Status)
+		}
+		if current.WinnerUserID == nil {
+			return fmt.Errorf("%w: sold auction has no winner", ErrInvalidTransition)
+		}
+		if existing, err := tx.GetOrderByAuction(ctx, current.ID); err == nil {
+			result = &SettleResult{
+				AuctionID:       current.ID,
+				Settled:         false,
+				Status:          current.Status,
+				OrderID:         &existing.ID,
+				FinalPriceCents: current.CurrentPriceCents,
+			}
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		order, err := createPendingOrderForAuctionTx(ctx, tx, current, s.now())
+		if err != nil {
+			return err
+		}
+		result = &SettleResult{
+			AuctionID:       current.ID,
+			Settled:         true,
+			Status:          current.Status,
+			OrderID:         &order.ID,
+			FinalPriceCents: current.CurrentPriceCents,
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func createPendingOrderForAuctionTx(ctx context.Context, tx repository.AdminStore, auction *model.Auction, now time.Time) (*model.Order, error) {
+	if auction.WinnerUserID == nil {
+		return nil, fmt.Errorf("%w: auction has no winner", ErrInvalidTransition)
+	}
+	room, roomErr := tx.GetRoom(ctx, auction.RoomID)
+	if roomErr != nil {
+		return nil, fmt.Errorf("获取直播间信息失败: %w", roomErr)
+	}
+	order := &model.Order{
+		AuctionID:       auction.ID,
+		ProductID:       auction.ProductID,
+		BuyerID:         *auction.WinnerUserID,
+		SellerID:        room.SellerID,
+		FinalPriceCents: auction.CurrentPriceCents,
+		Status:          "pending_payment",
+		CreatedAt:       now,
+	}
+	if err := tx.CreateOrder(ctx, order); err != nil {
+		return nil, err
+	}
+
+	eventPayload, _ := json.Marshal(map[string]interface{}{
+		"type":      "order.created",
+		"auctionId": auction.ID,
+		"orderId":   order.ID,
+		"buyerId":   order.BuyerID,
+		"sellerId":  order.SellerID,
+		"roomId":    auction.RoomID,
+	})
+	if err := tx.CreateOutboxEvent(ctx, &model.OutboxEvent{
+		EventType: "order.created",
+		Payload:   string(eventPayload),
+		Status:    "pending",
+		EventUUID: fmt.Sprintf("order-%d-%d", auction.ID, order.ID),
+	}); err != nil {
+		return nil, err
+	}
+	return order, nil
 }
 
 // PayOrderInput 是支付订单的输入参数。
@@ -427,6 +485,10 @@ func (s *SettleService) closePaymentTimeoutTx(ctx context.Context, tx repository
 		if err := tx.UpdateAuction(ctx, auction); err != nil {
 			return false, err
 		}
+	}
+	// 支付超时：库存 +1
+	if err := tx.UpdateProductStock(ctx, order.ProductID, 1); err != nil {
+		return false, err
 	}
 	if err := tx.UpdateProductStatus(ctx, order.ProductID, ProductStatusAvailable); err != nil {
 		return false, err
