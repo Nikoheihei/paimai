@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { getToken, setToken as apiSetToken, clearToken as apiClearToken, getMe, type MeResult } from '../api/client'
+import { getToken, setToken as apiSetToken, clearToken as apiClearToken, logout as apiLogout, getMe, type MeResult } from '../api/client'
 import { parseUserIdFromToken } from '../utils/auth'
 
 type AuthState = {
@@ -20,6 +20,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isAuthed: true, userId })
   },
   logout: () => {
+    void apiLogout() // 先用当前 token 通知后端释放会话锁
     apiClearToken()
     set({ isAuthed: false, userId: 0, userInfo: null })
   },

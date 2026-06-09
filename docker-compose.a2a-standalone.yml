@@ -1,0 +1,84 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: paimai-a2a-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: paimai
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "13308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-master:
+    image: redis:7-alpine
+    container_name: paimai-a2a-redis-master
+    restart: always
+    ports:
+      - "16381:6379"
+    volumes:
+      - redis_master_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+
+  redis-slave:
+    image: redis:7-alpine
+    container_name: paimai-a2a-redis-slave
+    restart: always
+    ports:
+      - "16382:6379"
+    volumes:
+      - redis_slave_data:/data
+    command: redis-server --replicaof paimai-a2a-redis-master 6379 --appendonly yes --appendfsync everysec
+    depends_on:
+      - redis-master
+
+  server:
+    build: ./server
+    container_name: paimai-a2a-server
+    restart: always
+    ports:
+      - "18080:8080"
+      - "16060:6060"
+    environment:
+      SERVER_PORT: "8080"
+      MYSQL_DSN: "root:rootpassword@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
+      REDIS_MASTER_ADDR: "redis-master:6379"
+      REDIS_SLAVE_ADDR: "redis-slave:6379"
+      JWT_SECRET: "paimai_dev_secret_2026"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis-master:
+        condition: service_started
+      redis-slave:
+        condition: service_started
+
+  web-h5:
+    build: ./web-h5
+    container_name: paimai-a2a-web-h5
+    restart: always
+    ports:
+      - "15173:80"
+    depends_on:
+      - server
+
+  web-admin:
+    build: ./web-admin
+    container_name: paimai-a2a-web-admin
+    restart: always
+    ports:
+      - "15174:80"
+    depends_on:
+      - server
+
+volumes:
+  mysql_data:
+  redis_master_data:
+  redis_slave_data:

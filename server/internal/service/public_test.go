@@ -113,6 +113,10 @@ func (s *publicStoreStub) GetUser(_ context.Context, id uint64) (*model.User, er
 	return nil, nil
 }
 
+func (s *publicStoreStub) GetUsernameByUserID(_ context.Context, id uint64) (string, error) {
+	return "", gorm.ErrRecordNotFound
+}
+
 // TestPublicServiceGetRoomNotFound 验证直播间不存在时转换为服务层 ErrNotFound。
 func TestPublicServiceGetRoomNotFound(t *testing.T) {
 	svc := NewPublicService(newPublicStoreStub(), nil, nil, nil, nil)

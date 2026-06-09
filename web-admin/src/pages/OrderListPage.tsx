@@ -15,6 +15,10 @@ const statusBadgeClass: Record<string, string> = {
   closed: 'badge-gray',
 }
 
+function buyerName(order: Order) {
+  return order.buyerUsername || `#${order.buyerId}`
+}
+
 export default function OrderListPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [filtered, setFiltered] = useState<Order[]>([])
@@ -59,7 +63,7 @@ export default function OrderListPage() {
     let result = orders
     if (search.trim()) {
       const q = search.trim().toLowerCase()
-      result = result.filter(o => String(o.id).includes(q) || String(o.buyerId).includes(q) || String(o.auctionId).includes(q))
+      result = result.filter(o => String(o.id).includes(q) || String(o.buyerId).includes(q) || String(o.auctionId).includes(q) || (o.buyerUsername || '').toLowerCase().includes(q))
     }
     if (statusFilter) result = result.filter(o => o.status === statusFilter)
     if (dateFrom) result = result.filter(o => new Date(o.createdAt) >= new Date(dateFrom))
@@ -69,8 +73,8 @@ export default function OrderListPage() {
   }, [search, statusFilter, dateFrom, dateTo, orders])
 
   const handleExport = () => {
-    const rows = filtered.map(o => `${o.id},${o.auctionId},${o.buyerId},${o.finalPriceCents},${o.status},${o.createdAt}`)
-    const csv = '订单ID,竞拍ID,买家ID,金额(分),状态,创建时间\n' + rows.join('\n')
+    const rows = filtered.map(o => `${o.id},${o.auctionId},${buyerName(o)},${o.finalPriceCents},${o.status},${o.createdAt}`)
+    const csv = '订单ID,竞拍ID,买家用户名,金额(分),状态,创建时间\n' + rows.join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -92,7 +96,7 @@ export default function OrderListPage() {
 
       {/* 筛选栏 */}
       <div className="filter-bar">
-        <input type="text" placeholder="搜索订单/竞拍/买家ID..." value={search} onChange={e => setSearch(e.target.value)} className="filter-input" />
+        <input type="text" placeholder="搜索订单/竞拍/买家用户名..." value={search} onChange={e => setSearch(e.target.value)} className="filter-input" />
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="filter-select">
           <option value="">全部状态</option>
           <option value="pending_payment">待付款</option>
@@ -112,7 +116,7 @@ export default function OrderListPage() {
               <tr>
                 <th>订单ID</th>
                 <th>竞拍ID</th>
-                <th>买家ID</th>
+                <th>买家</th>
                 <th>金额</th>
                 <th>状态</th>
                 <th>创建时间</th>
@@ -124,7 +128,7 @@ export default function OrderListPage() {
                 <tr key={o.id} onClick={() => setDetail(o)} style={{ cursor: 'pointer' }}>
                   <td>#{o.id}</td>
                   <td>#{o.auctionId}</td>
-                  <td>#{o.buyerId}</td>
+                  <td>{buyerName(o)}</td>
                   <td><strong>¥{formatCents(o.finalPriceCents)}</strong></td>
                   <td><span className={`status-badge ${statusBadgeClass[o.status] || 'badge-gray'}`}>{statusLabel[o.status] || o.status}</span></td>
                   <td>{new Date(o.createdAt).toLocaleString('zh-CN')}</td>
@@ -161,7 +165,7 @@ export default function OrderListPage() {
             <div className="modal-body">
               <div className="info-row"><span>竞拍ID</span><span>#{detail.auctionId}</span></div>
               <div className="info-row"><span>商品ID</span><span>#{detail.productId}</span></div>
-              <div className="info-row"><span>买家ID</span><span>#{detail.buyerId}</span></div>
+              <div className="info-row"><span>买家</span><span>{buyerName(detail)}</span></div>
               <div className="info-row"><span>卖家ID</span><span>#{detail.sellerId}</span></div>
               <div className="info-row"><span>最终价格</span><span className="price">¥{formatCents(detail.finalPriceCents)}</span></div>
               <div className="info-row"><span>状态</span><span className={`status-badge ${statusBadgeClass[detail.status]}`}>{statusLabel[detail.status]}</span></div>

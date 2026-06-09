@@ -10,9 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"paimai/config"
+	agentpkg "paimai/internal/agent"
 	"paimai/internal/handler"
 	"paimai/internal/repository"
 	"paimai/internal/service"
+	"paimai/internal/session"
 	"paimai/internal/stream"
 	websocketpkg "paimai/internal/websocket"
 	"paimai/pkg/db"
@@ -24,6 +26,9 @@ import (
 func main() {
 	// 1. 加载配置
 	cfg := config.LoadConfig()
+
+	// 全站单会话锁：配置空闲超时。
+	session.Configure(time.Duration(cfg.SessionIdleTTLSec) * time.Second)
 
 	// 2. 初始化数据库连接 (如果容器未启动，仅记录错误但不崩溃，便于非 Docker 环境编译运行)
 	database, err := db.InitDB(cfg.MySQLDSN)
@@ -133,6 +138,17 @@ func main() {
 		// 用户端公开路由（无鉴权，在前端首页访问前注册）
 		publicStore := repository.NewGormPublicStore(database)
 		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
+		agentStore := agentpkg.NewGormStore(database)
+		agentService := agentpkg.NewService(agentStore, adminStore, publicService)
+
+		// 启动常驻买家 Agent Runner：周期扫描 running 竞拍、按策略自动出价、补建 Pact。
+		if cfg.AgentRunnerEnabled {
+			runner := agentpkg.NewRunner(agentService, time.Duration(cfg.AgentRunnerIntervalMS)*time.Millisecond)
+			go runner.Start(context.Background())
+		} else {
+			log.Println("[agent-runner] 已禁用 (AGENT_RUNNER_ENABLED=false)")
+		}
+
 		upgraderCfg := &handler.UpgraderConfig{AllowAllOrigins: cfg.AllowAllWebSocketOrigins}
 		handler.RegisterPublicRoutes(r, publicService, hub, upgraderCfg)
 
@@ -146,9 +162,11 @@ func main() {
 		handler.RegisterAdminRoutes(adminGroup, adminService)
 		handler.RegisterAdminSettleRoutes(adminGroup, settleService)
 		handler.RegisterRoomRoutes(adminGroup, roomService, hub)
+		handler.RegisterMerchantAgentRoutes(adminGroup, agentService, adminService)
+		handler.RegisterAgentRoutes(r, agentService)
 
 		// 买家端订单路由（鉴权，非 Admin）
-		handler.RegisterBuyerSettleRoutes(r, settleService)
+		handler.RegisterBuyerSettleRoutesWithPactGate(r, settleService, agentService)
 
 		handler.RegisterUploadRoutes(r)
 		handler.RegisterAuthMeRoute(r, authService)

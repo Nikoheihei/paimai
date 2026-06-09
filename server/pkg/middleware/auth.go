@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	jwtpkg "paimai/pkg/jwt"
+	"paimai/internal/session"
 )
 
 // AuthRequired 验证请求头中的 JWT token，并将 userId / username 注入 gin.Context。
@@ -45,6 +46,9 @@ func AuthRequired() gin.HandlerFunc {
 		c.Set("username", claims.Username)
 		c.Set("nickname", claims.Nickname)
 		c.Set("role", claims.Role)
+
+		// 续期全站单会话锁：持有者的活动刷新活跃时间，避免被空闲超时释放。
+		session.Default.Touch(claims.UserID)
 
 		c.Next()
 	}

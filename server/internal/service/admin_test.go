@@ -145,6 +145,10 @@ func (s *adminStoreStub) GetOrder(_ context.Context, id uint64) (*model.Order, e
 	return &cp, nil
 }
 
+func (s *adminStoreStub) GetUsernameByUserID(_ context.Context, id uint64) (string, error) {
+	return "", gorm.ErrRecordNotFound
+}
+
 // GetOrderByAuction 从内存仓储中按竞拍 ID 查询关联订单。
 func (s *adminStoreStub) GetOrderByAuction(_ context.Context, auctionID uint64) (*model.Order, error) {
 	for _, order := range s.orders {

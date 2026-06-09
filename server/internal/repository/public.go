@@ -19,6 +19,7 @@ type PublicStore interface {
 	ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]model.Auction, error)
 	GetProduct(ctx context.Context, id uint64) (*model.Product, error)
 	GetUser(ctx context.Context, id uint64) (*model.User, error)
+	GetUsernameByUserID(ctx context.Context, id uint64) (string, error)
 	CreateBid(ctx context.Context, bid *model.Bid) error
 	UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error
 	ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error)
@@ -125,6 +126,14 @@ func (s *GormPublicStore) GetUser(ctx context.Context, id uint64) (*model.User, 
 		return nil, err
 	}
 	return &u, nil
+}
+
+func (s *GormPublicStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
+	var auth model.UserAuth
+	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
+		return "", err
+	}
+	return auth.Username, nil
 }
 
 func (s *GormPublicStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {

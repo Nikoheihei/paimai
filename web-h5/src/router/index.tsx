@@ -5,6 +5,9 @@ import LiveRoomPage from '../pages/LiveRoomPage'
 import AuctionDetailPage from '../pages/AuctionDetailPage'
 import OrderPage from '../pages/OrderPage'
 import AddressListPage from '../pages/AddressListPage'
+import AgentListPage from '../pages/AgentListPage'
+import AgentDetailPage from '../pages/AgentDetailPage'
+import PactListPage from '../pages/PactListPage'
 import LoginPage from '../pages/LoginPage'
 import { useAuthStore } from '../store/useAuthStore'
 
@@ -41,6 +44,18 @@ export const router = createHashRouter([
       {
         path: 'address',
         element: <AddressListPage />
+      },
+      {
+        path: 'agents',
+        element: <AgentListPage />
+      },
+      {
+        path: 'agents/:agentId',
+        element: <AgentDetailPage />
+      },
+      {
+        path: 'pacts',
+        element: <PactListPage />
       }
     ]
   },

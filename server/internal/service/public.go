@@ -83,12 +83,14 @@ type BidResult struct {
 	ReserveMet        bool   `json:"reserveMet"`
 	IdempotentReplay  bool   `json:"idempotentReplay"`
 	TooFrequent       bool   `json:"tooFrequent"`
+	Code              string `json:"code"` // 明确拒绝原因，如 BID_TOO_LOW
 }
 
 // RankingItem 表示排行榜上的单条条目。
 type RankingItem struct {
 	Rank        int    `json:"rank"`
 	UserID      uint64 `json:"userId"`
+	Username    string `json:"username"`
 	AmountCents int64  `json:"amountCents"`
 }
 
@@ -252,17 +254,17 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 			return err
 		}
 		if auction.Status != "running" {
-			result = &BidResult{Accepted: false, Status: auction.Status}
+			result = &BidResult{Accepted: false, Status: auction.Status, Code: auction.Status}
 			return nil
 		}
 		if now.After(auction.EndAt) {
-			result = &BidResult{Accepted: false, Status: "ended"}
+			result = &BidResult{Accepted: false, Status: "ended", Code: "AUCTION_ENDED"}
 			return nil
 		}
 
 		// 检查出价合法性
 		if input.AmountCents < auction.CurrentPriceCents+auction.BidIncrementCents {
-			result = &BidResult{Accepted: false}
+			result = &BidResult{Accepted: false, Code: "BID_TOO_LOW"}
 			return nil
 		}
 
@@ -386,7 +388,7 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 				s.redis.Master.Del(cleanCtx, inflightKey)
 			}()
 		}
-		return result, &BidRejectError{Code: result.Status, Message: bidRejectMessage(result.Status)}
+		return result, &BidRejectError{Code: result.Code, Message: bidRejectMessage(result.Code)}
 	}
 	if result.IdempotentReplay {
 		return result, nil
@@ -435,6 +437,7 @@ func (s *PublicService) rankingFromRedis(ctx context.Context, auctionID uint64, 
 		items = append(items, RankingItem{
 			Rank:        index + 1,
 			UserID:      userID,
+			Username:    s.usernameForUser(ctx, userID),
 			AmountCents: int64(value.Score),
 		})
 	}
@@ -462,12 +465,21 @@ func (s *PublicService) rankingFromDB(ctx context.Context, auctionID uint64, lim
 		items = append(items, RankingItem{
 			Rank:        index + 1,
 			UserID:      bid.UserID,
+			Username:    s.usernameForUser(ctx, bid.UserID),
 			AmountCents: bid.AmountCents,
 		})
 	}
 	// 显式按金额降序排序（不依赖仓储层排序约定）
 	sortRankingItems(items)
 	return items, nil
+}
+
+func (s *PublicService) usernameForUser(ctx context.Context, userID uint64) string {
+	username, err := s.store.GetUsernameByUserID(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	return username
 }
 
 // validateBidInput 校验出价请求的基础字段。
@@ -567,8 +579,9 @@ func (r bidLuaResult) toBidResult(auctionID uint64, userID uint64) *BidResult {
 		Extended:          r.extended,
 		Sold:              r.sold,
 		ReserveMet:        r.reserveMet,
-		IdempotentReplay:  false,
+		IdempotentReplay:  r.idempotentReplay,
 		TooFrequent:       r.tooFrequent,
+		Code:              r.code,
 	}
 }
 

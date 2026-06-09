@@ -144,6 +144,13 @@ export default function AuctionDetailPage() {
             <Countdown endAt={auction.endAt} />
           </div>
         )}
+        <button
+          className="admin-btn"
+          style={{ marginTop: 12 }}
+          onClick={() => navigate('/agents')}
+        >
+          🤖 派 Agent 帮我自动出价
+        </button>
       </div>
 
       {/* 出价历史时间线 */}

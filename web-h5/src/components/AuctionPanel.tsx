@@ -689,7 +689,11 @@ export default function AuctionPanel({
                 <span className="rank-num">#{item.rank}</span>
                 <div className="ranking-user">
                   <div className="ranking-user-line">
-                    <div className="ranking-user-name">{item.userId===userId?'我':`用户${item.userId}`}</div>
+                    <div className="ranking-user-name">
+                      {item.userId === userId
+                        ? (item.username ? `我 · ${item.username}` : '我')
+                        : (item.username || `用户${item.userId}`)}
+                    </div>
                     {isCurrentPaid && item.userId === userId && (
                       <span className="ranking-paid-badge">已支付</span>
                     )}

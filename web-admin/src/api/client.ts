@@ -76,6 +76,10 @@ export async function register(username: string, password: string, nickname?: st
 export async function getMe(): Promise<MeResult> {
   return apiFetch('/auth/me')
 }
+/** 登出：释放全站单会话锁（best-effort）。 */
+export async function logout(): Promise<void> {
+  try { await apiFetch('/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
+}
 
 export type LiveRoom = { id: number; sellerId: number; title: string; coverUrl: string; status: string; createdAt: string }
 export type CloseRoomResult = { roomId: number; status: string; settled: number }
@@ -235,7 +239,7 @@ export async function settleAuction(id: number): Promise<any> {
   return apiFetch(`/admin/auctions/${id}/settle`, { method: 'POST' })
 }
 
-export type Order = { id: number; auctionId: number; productId: number; buyerId: number; sellerId: number; finalPriceCents: number; status: string; addressId?: number | null; addressSnapshot?: string; createdAt: string; paidAt: string | null }
+export type Order = { id: number; auctionId: number; productId: number; buyerId: number; buyerUsername?: string; sellerId: number; sellerUsername?: string; finalPriceCents: number; status: string; addressId?: number | null; addressSnapshot?: string; createdAt: string; paidAt: string | null }
 export async function listOrders(): Promise<Order[]> {
   return apiFetch('/admin/orders')
 }

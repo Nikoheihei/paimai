@@ -38,6 +38,7 @@ type AdminStore interface {
 	DeleteRoom(ctx context.Context, id uint64) error
 	ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error)
 	GetUser(ctx context.Context, id uint64) (*model.User, error)
+	GetUsernameByUserID(ctx context.Context, id uint64) (string, error)
 
 	CreateOrder(ctx context.Context, order *model.Order) error
 	GetOrder(ctx context.Context, id uint64) (*model.Order, error)
@@ -249,6 +250,13 @@ func (s *txGormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User,
 	var u model.User
 	err := s.db.WithContext(ctx).First(&u, id).Error
 	return &u, err
+}
+func (s *txGormAdminStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
+	var auth model.UserAuth
+	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
+		return "", err
+	}
+	return auth.Username, nil
 }
 func (s *txGormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {
 	return s.db.WithContext(ctx).Create(order).Error
@@ -482,6 +490,14 @@ func (s *GormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, e
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (s *GormAdminStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
+	var auth model.UserAuth
+	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
+		return "", err
+	}
+	return auth.Username, nil
 }
 
 func (s *GormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {

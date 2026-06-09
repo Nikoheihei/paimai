@@ -1,0 +1,31 @@
+services:
+  mysql:
+    container_name: paimai-a2a-mysql
+    ports:
+      - "13308:3306"
+
+  redis-master:
+    container_name: paimai-a2a-redis-master
+    ports:
+      - "16381:6379"
+
+  redis-slave:
+    container_name: paimai-a2a-redis-slave
+    ports:
+      - "16382:6379"
+
+  server:
+    container_name: paimai-a2a-server
+    ports:
+      - "18080:8080"
+      - "16060:6060"
+
+  web-h5:
+    container_name: paimai-a2a-web-h5
+    ports:
+      - "15173:80"
+
+  web-admin:
+    container_name: paimai-a2a-web-admin
+    ports:
+      - "15174:80"

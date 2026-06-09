@@ -110,6 +110,7 @@ export interface BidResult {
 export interface RankingItem {
   rank: number
   userId: number
+  username?: string
   amountCents: number
 }
 

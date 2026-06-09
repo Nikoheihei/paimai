@@ -46,6 +46,8 @@ type OrderDetail struct {
 	ProductName    string `json:"productName"`
 	ProductImage   string `json:"productImage"`
 	SellerNickname string `json:"sellerNickname"`
+	BuyerUsername  string `json:"buyerUsername"`
+	SellerUsername string `json:"sellerUsername"`
 }
 
 // SettleAuction 对指定竞拍执行结算。
@@ -362,6 +364,15 @@ func (s *SettleService) GetOrder(ctx context.Context, orderID uint64) (*model.Or
 	return order, nil
 }
 
+// GetOrderDetail 查询订单详情，并补充展示字段。
+func (s *SettleService) GetOrderDetail(ctx context.Context, orderID uint64) (*OrderDetail, error) {
+	order, err := s.GetOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichOrder(ctx, *order), nil
+}
+
 // GetBuyerOrder 查询当前买家的订单详情，并校验订单归属。
 func (s *SettleService) GetBuyerOrder(ctx context.Context, orderID uint64, buyerID uint64) (*OrderDetail, error) {
 	if buyerID == 0 {
@@ -383,8 +394,12 @@ func (s *SettleService) ListOrders(ctx context.Context) ([]model.Order, error) {
 }
 
 // ListSellerOrders 返回指定商家的订单列表。
-func (s *SettleService) ListSellerOrders(ctx context.Context, sellerID uint64) ([]model.Order, error) {
-	return s.adminStore.ListOrdersBySeller(ctx, sellerID)
+func (s *SettleService) ListSellerOrders(ctx context.Context, sellerID uint64) ([]OrderDetail, error) {
+	orders, err := s.adminStore.ListOrdersBySeller(ctx, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichOrders(ctx, orders), nil
 }
 
 // ListBuyerOrders 返回指定买家的订单列表。
@@ -588,6 +603,12 @@ func (s *SettleService) enrichOrder(ctx context.Context, order model.Order) *Ord
 	}
 	if seller, err := s.adminStore.GetUser(ctx, order.SellerID); err == nil && seller != nil {
 		detail.SellerNickname = seller.Nickname
+	}
+	if username, err := s.adminStore.GetUsernameByUserID(ctx, order.BuyerID); err == nil {
+		detail.BuyerUsername = username
+	}
+	if username, err := s.adminStore.GetUsernameByUserID(ctx, order.SellerID); err == nil {
+		detail.SellerUsername = username
 	}
 	return detail
 }

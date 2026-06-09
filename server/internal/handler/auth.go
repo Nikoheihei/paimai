@@ -10,6 +10,7 @@ import (
 
 	"paimai/internal/model"
 	"paimai/internal/service"
+	"paimai/internal/session"
 	"paimai/pkg/response"
 )
 
@@ -32,6 +33,17 @@ func RegisterAuthRoutes(r *gin.Engine, authService *service.AuthService) {
 func RegisterAuthMeRoute(r *gin.Engine, authService *service.AuthService) {
 	h := &AuthHandler{authService: authService}
 	r.GET("/api/auth/me", h.me)
+	r.POST("/api/auth/logout", h.logout)
+}
+
+// logout 释放全站单会话锁（仅持有者本人有效）。
+func (h *AuthHandler) logout(c *gin.Context) {
+	if uid, ok := c.Get("userId"); ok {
+		if id, ok := uid.(uint64); ok {
+			session.Default.Release(id)
+		}
+	}
+	response.Success(c, gin.H{"loggedOut": true})
 }
 
 // RegisterAddressRoutes 注册收货地址路由（挂在鉴权中间件之后）。
@@ -200,12 +212,22 @@ func (h *AuthHandler) register(c *gin.Context) {
 }
 
 // login 处理用户登录请求。
+// 全站单会话：已有其他账号在线时拒绝登录；同一账号可重复登录刷新会话。
 func (h *AuthHandler) login(c *gin.Context) {
 	var input service.LoginInput
 	if !bindJSON(c, &input) {
 		return
 	}
 	result, err := h.authService.Login(c.Request.Context(), input)
+	if err != nil {
+		writeResult(c, result, err)
+		return
+	}
+	if holderName, ok := session.Default.TryAcquire(result.UserID, result.Username); !ok {
+		response.Error(c, http.StatusConflict, 409,
+			"当前已有用户【"+holderName+"】在线，全站同一时刻只允许一个用户登录，请等待其退出后再登录")
+		return
+	}
 	writeResult(c, result, err)
 }
 

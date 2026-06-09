@@ -135,6 +135,9 @@ func (s *mockAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64)
 func (s *mockAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
 	return nil, nil
 }
+func (s *mockAdminStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
+	return "", nil
+}
 func (s *mockAdminStore) CreateOrder(ctx context.Context, order *model.Order) error { return nil }
 func (s *mockAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
 	return nil, nil

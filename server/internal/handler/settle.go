@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -13,6 +14,14 @@ import (
 // SettleHandler 负责结算与订单管理的 HTTP 协议适配。
 type SettleHandler struct {
 	settleService *service.SettleService
+	pactGate      PactPaymentGate
+}
+
+// PactPaymentGate is an optional pre-payment guard for agent-assisted orders.
+// Manual buyer orders pass through when the gate finds no Pact for the order.
+type PactPaymentGate interface {
+	CheckBuyerPaymentAllowed(ctx context.Context, orderID, buyerID uint64) error
+	AuditPaymentResult(ctx context.Context, orderID, buyerID uint64, paid bool, payErr error)
 }
 
 // RegisterAdminSettleRoutes 注册后台结算与订单管理路由。
@@ -62,7 +71,13 @@ func (h *SettleHandler) listOrders(c *gin.Context) {
 // 注意：用 r.GET("/api/orders", ...) 而非 r.Group("/api").GET("/orders", ...)
 // 避免 Gin v1.10 的 radix tree 在 /api/admin/orders 和 /api/orders 共存时的冲突 bug。
 func RegisterBuyerSettleRoutes(r gin.IRouter, settleService *service.SettleService) {
+	RegisterBuyerSettleRoutesWithPactGate(r, settleService, nil)
+}
+
+// RegisterBuyerSettleRoutesWithPactGate 注册带 Pact 前置校验的买家端订单路由。
+func RegisterBuyerSettleRoutesWithPactGate(r gin.IRouter, settleService *service.SettleService, pactGate PactPaymentGate) {
 	h := &SettleHandler{settleService: settleService}
+	h.pactGate = pactGate
 	r.GET("/api/orders", h.listBuyerOrders)
 	r.POST("/api/orders/:id/pay", h.payBuyerOrder)
 	r.GET("/api/orders/:id", h.getBuyerOrder)
@@ -114,7 +129,17 @@ func (h *SettleHandler) payBuyerOrder(c *gin.Context) {
 	}
 	var input service.PayOrderInput
 	_ = c.ShouldBindJSON(&input)
-	order, err := h.settleService.PayBuyerOrder(c.Request.Context(), id, mustGetUserID(c), input)
+	buyerID := mustGetUserID(c)
+	if h.pactGate != nil {
+		if err := h.pactGate.CheckBuyerPaymentAllowed(c.Request.Context(), id, buyerID); err != nil {
+			writeResult(c, nil, err)
+			return
+		}
+	}
+	order, err := h.settleService.PayBuyerOrder(c.Request.Context(), id, buyerID, input)
+	if h.pactGate != nil {
+		h.pactGate.AuditPaymentResult(c.Request.Context(), id, buyerID, err == nil, err)
+	}
 	writeResult(c, order, err)
 }
 
@@ -124,7 +149,7 @@ func (h *SettleHandler) getOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.settleService.GetOrder(c.Request.Context(), id)
+	order, err := h.settleService.GetOrderDetail(c.Request.Context(), id)
 	writeResult(c, order, err)
 }
 

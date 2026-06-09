@@ -105,6 +105,15 @@ export async function getMe(): Promise<MeResult> {
   return parseApiData<MeResult>(res, '登录已过期，请重新登录')
 }
 
+/** 登出：释放全站单会话锁（best-effort，失败不阻塞前端清理）。 */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${BASE}/auth/logout`, { method: 'POST', headers: authHeaders() })
+  } catch {
+    // 忽略网络错误，前端仍会清掉本地 token
+  }
+}
+
 // --- 通用请求工具 ---
 
 function authHeaders(): Record<string, string> {
@@ -175,6 +184,7 @@ export type LiveRoom = {
 export type RankingItem = {
   rank: number
   userId: number
+  username?: string
   amountCents: number
 }
 
@@ -276,4 +286,146 @@ export async function updateAddress(id: number, input: Omit<Address, 'id' | 'use
 }
 export async function deleteAddress(id: number): Promise<void> {
   return apiFetch(`/addresses/${id}`, { method: 'DELETE' })
+}
+
+// --- 买家 Agent API ---
+
+export type AgentProfile = {
+  id: number
+  ownerUserId: number
+  agentType: string
+  status: string
+  prompt: string
+  strategyJson: string
+  maxBudgetCents: number
+  expiresAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AgentStrategy = {
+  prompt?: string
+  productKeywords?: string[]
+  buyerId?: number
+  roomId?: number
+  auctionId?: number
+  maxBudgetCents?: number
+  strategy?: 'conservative' | 'follow_up' | 'reserve_then_follow' | 'cap_only' | 'custom'
+  maxBidTimes?: number
+  minIntervalMs?: number
+  requireHumanPay?: boolean
+  /** 出价触发方式：lead=主动出价 / follow=跟价模式 */
+  trigger?: 'lead' | 'follow'
+  /** 出价节奏：min_step=最小步长 / reserve=保留价优先 */
+  pace?: 'min_step' | 'reserve'
+  /** 停止比例：0=仅预算硬约束 / 0-1=到达预算X%时停止 */
+  stopRatio?: number
+  custom?: {
+    budgetRatio?: number
+    followUp?: boolean
+    reserveFirst?: boolean
+  }
+  customText?: string
+}
+
+export type AgentAuditLog = {
+  id: number
+  traceId: string
+  agentId: number | null
+  userId: number
+  actionType: string
+  timestampMs: number
+  payloadJson: string
+  operator: string
+  createdAt: string
+}
+
+export type AgentPact = {
+  id: number
+  agentId: number
+  buyerId: number
+  auctionId: number
+  orderId: number
+  productSnapshotJson: string
+  finalPriceCents: number
+  winningBidId: number | null
+  bidHistoryHash: string
+  maxBudgetCents: number
+  addressRequired: boolean
+  addressId: number | null
+  addressSnapshot: string
+  paymentDeadlineAt: string
+  status: string
+  approvedByUserId: number | null
+  approvedAt: string | null
+  rejectedAt: string | null
+  traceId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateBuyerAgentInput = {
+  prompt: string
+  roomId?: number
+  auctionId?: number
+  maxBudgetCents?: number
+  strategy?: AgentStrategy['strategy']
+  maxBidTimes?: number
+  minIntervalMs?: number
+  requireHumanPay?: boolean
+  productKeywords?: string[]
+  /** 出价触发方式 */
+  trigger?: 'lead' | 'follow'
+  /** 出价节奏 */
+  pace?: 'min_step' | 'reserve'
+  /** 停止比例 0-1 */
+  stopRatio?: number
+  customText?: string
+  overBudgetCents?: number
+  expiresAt?: string | null
+}
+
+/** 创建买家 Agent（自然语言意图 + 可选预算/关键词）。 */
+export async function createBuyerAgent(input: CreateBuyerAgentInput): Promise<AgentProfile> {
+  return apiFetch('/agent/buyer-agents', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export async function listBuyerAgents(): Promise<AgentProfile[]> {
+  const list = await apiFetch('/agent/buyer-agents')
+  return Array.isArray(list) ? list : []
+}
+
+export async function activateAgent(id: number): Promise<AgentProfile> {
+  return apiFetch(`/agent/buyer-agents/${id}/activate`, { method: 'PATCH' })
+}
+
+export async function pauseAgent(id: number): Promise<AgentProfile> {
+  return apiFetch(`/agent/buyer-agents/${id}/pause`, { method: 'PATCH' })
+}
+
+export async function getAgentAudit(id: number, limit = 100): Promise<AgentAuditLog[]> {
+  const list = await apiFetch(`/agent/buyer-agents/${id}/audit?limit=${limit}`)
+  return Array.isArray(list) ? list : []
+}
+
+// --- Pact（赢拍后人工审批）API ---
+
+export async function listPacts(): Promise<AgentPact[]> {
+  const list = await apiFetch('/agent/pacts')
+  return Array.isArray(list) ? list : []
+}
+
+export async function getPact(id: number): Promise<AgentPact> {
+  return apiFetch(`/agent/pacts/${id}`)
+}
+
+export async function approvePact(id: number, addressId: number, addressSnapshot: string): Promise<AgentPact> {
+  return apiFetch(`/agent/pacts/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ addressId, addressSnapshot }),
+  })
+}
+
+export async function rejectPact(id: number): Promise<AgentPact> {
+  return apiFetch(`/agent/pacts/${id}/reject`, { method: 'POST' })
 }

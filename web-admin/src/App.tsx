@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { isLoggedIn, clearToken, getMe, type MeResult } from './api/client'
+import { isLoggedIn, clearToken, logout as apiLogout, getMe, type MeResult } from './api/client'
 import AdminLoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import RoomListPage from './pages/RoomListPage'
@@ -60,6 +60,7 @@ function App() {
   }
 
   const handleLogout = () => {
+    void apiLogout() // 先用当前 token 释放后端会话锁
     clearToken()
     setAuthed(false)
     setMe(null)

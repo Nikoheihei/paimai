@@ -40,6 +40,12 @@ func InitDB(dsn string) (*gorm.DB, error) {
 		&model.UserAuth{},
 		&model.Address{},
 		&model.OutboxEvent{},
+		&model.AgentProfile{},
+		&model.AgentAuctionMatch{},
+		&model.AgentBidAttempt{},
+		&model.AgentPact{},
+		&model.AgentAuditLog{},
+		&model.MerchantAgentJob{},
 	)
 	if err != nil {
 		return nil, err

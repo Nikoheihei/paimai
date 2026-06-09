@@ -2,11 +2,14 @@
 services:
   mysql:
     image: mysql:8.0
-    container_name: paimai-mysql
+    container_name: paimai-a2a-mysql
     restart: always
     environment:
       MYSQL_DATABASE: paimai
       MYSQL_ROOT_PASSWORD: rootpassword
+      AGENT_LLM_API_KEY: "${AGENT_LLM_API_KEY:-}"
+      AGENT_LLM_BASE_URL: "https://api.deepseek.com"
+      AGENT_LLM_MODEL: "deepseek-v4-pro"
     ports:
       - "3308:3306"
     volumes:
@@ -20,7 +23,7 @@ services:
 
   redis-master:
     image: redis:7-alpine
-    container_name: paimai-redis-master
+    container_name: paimai-a2a-redis-master
     restart: always
     ports:
       - "6381:6379"
@@ -30,7 +33,7 @@ services:
 
   redis-slave:
     image: redis:7-alpine
-    container_name: paimai-redis-slave
+    container_name: paimai-a2a-redis-slave
     restart: always
     ports:
       - "6382:6379"
@@ -42,7 +45,7 @@ services:
 
   server:
     build: ./server
-    container_name: paimai-server
+    container_name: paimai-a2a-server
     restart: always
     ports:
       - "8080:8080"
@@ -52,7 +55,7 @@ services:
       MYSQL_DSN: "root:rootpassword@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_MASTER_ADDR: "redis-master:6379"
       REDIS_SLAVE_ADDR: "redis-slave:6379"
-      JWT_SECRET: "paimai_dev_secret_2026"
+      JWT_SECRET: "${JWT_SECRET:-change_me_in_production}"
     depends_on:
       mysql:
         condition: service_healthy
@@ -63,7 +66,7 @@ services:
 
   web-h5:
     build: ./web-h5
-    container_name: paimai-web-h5
+    container_name: paimai-a2a-web-h5
     restart: always
     ports:
       - "5173:80"
@@ -72,7 +75,7 @@ services:
 
   web-admin:
     build: ./web-admin
-    container_name: paimai-web-admin
+    container_name: paimai-a2a-web-admin
     restart: always
     ports:
       - "5174:80"
