@@ -1,4 +1,4 @@
-# Real-time Auction Master (实时竞拍大师)
+# Real-time Auction Master
 
 > A live streaming auction platform powered by **AI Agent-to-Agent (A2A)** architecture with LLM-driven intelligent bidding, human-in-the-loop approval, and event-sourced reliability.
 
