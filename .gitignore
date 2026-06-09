@@ -1,15 +1,50 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
-.env
-.DS_Store
-*.log
-/tmp/
 .gocache/
+
+# Environment & secrets (NEVER commit these)
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+tmp/
+
+# Editor/IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+
+# Backup files
 *.bak
 *.new
-.idea/
+
+# Media files (large, should use external hosting)
 *.mp4
 *.mov
 *.avi
 *.webm
 *.mkv
+
+# AI-generated images and temporary docs
+generated-images/
+提交材料.md
+核心功能清单.md
+系统架构图.mmd
+技术图表参考手册.md
+
+# CI pipeline internal
+.codepipe/
+
+# pprof
+*.prof
