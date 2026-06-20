@@ -40,6 +40,11 @@ type Store interface {
 	CreateAuditLog(ctx context.Context, log *model.AgentAuditLog) error
 	ListAuditLogs(ctx context.Context, agentID uint64, limit int) ([]model.AgentAuditLog, error)
 
+	EnsureBiddingRule(ctx context.Context, rule *model.AgentBiddingRule) error
+	ListBiddingRules(ctx context.Context, userID uint64) ([]model.AgentBiddingRule, error)
+	CreateEpisodeSummary(ctx context.Context, summary *model.AgentEpisodeSummary) error
+	ListEpisodeSummaries(ctx context.Context, agentID uint64, limit int) ([]model.AgentEpisodeSummary, error)
+
 	CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error
 	CreateMerchantJob(ctx context.Context, job *model.MerchantAgentJob) error
 }
@@ -253,6 +258,50 @@ func (s *GormStore) ListAuditLogs(ctx context.Context, agentID uint64, limit int
 		return nil, err
 	}
 	return logs, nil
+}
+
+func (s *GormStore) EnsureBiddingRule(ctx context.Context, rule *model.AgentBiddingRule) error {
+	var existing model.AgentBiddingRule
+	err := s.db.WithContext(ctx).
+		Where("user_id = ? AND scope = ? AND rule_type = ?", rule.UserID, rule.Scope, rule.RuleType).
+		First(&existing).Error
+	if err == nil {
+		return nil
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+	return s.db.WithContext(ctx).Create(rule).Error
+}
+
+func (s *GormStore) ListBiddingRules(ctx context.Context, userID uint64) ([]model.AgentBiddingRule, error) {
+	var rules []model.AgentBiddingRule
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND enabled = ?", userID, true).
+		Order("id ASC").
+		Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func (s *GormStore) CreateEpisodeSummary(ctx context.Context, summary *model.AgentEpisodeSummary) error {
+	return s.db.WithContext(ctx).Create(summary).Error
+}
+
+func (s *GormStore) ListEpisodeSummaries(ctx context.Context, agentID uint64, limit int) ([]model.AgentEpisodeSummary, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var summaries []model.AgentEpisodeSummary
+	query := s.db.WithContext(ctx).Order("id DESC").Limit(limit)
+	if agentID > 0 {
+		query = query.Where("agent_id = ?", agentID)
+	}
+	if err := query.Find(&summaries).Error; err != nil {
+		return nil, err
+	}
+	return summaries, nil
 }
 
 func (s *GormStore) CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error {

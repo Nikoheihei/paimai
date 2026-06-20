@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +116,13 @@ func TestCreateBuyerAgentBuildsStrategySkill(t *testing.T) {
 	if skill.BuyerID != 1 || skill.Strategy != StrategyConservative || skill.MaxBidTimes != 3 || skill.MinIntervalMs != 5000 || !skill.RequireHumanPay {
 		t.Fatalf("unexpected strategy skill: %+v", skill)
 	}
+	rules, err := svc.store.ListBiddingRules(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListBiddingRules() error = %v", err)
+	}
+	if len(rules) != 1 || rules[0].RuleType != RuleTypeApprovalThreshold {
+		t.Fatalf("expected default approval threshold rule, got %+v", rules)
+	}
 }
 
 func TestCreateBuyerAgentRejectsAutoPay(t *testing.T) {
@@ -201,6 +210,64 @@ func TestSubmitBuyerBidRejectsMinInterval(t *testing.T) {
 	}
 }
 
+func TestSubmitBuyerBidBlocksAboveApprovalThresholdAndWritesSTM(t *testing.T) {
+	svc, store, core, bidder := newAgentTestHarness()
+	agent := seedAgent(store, 1, AgentTypeBuyer, AgentStatusActive, 1000)
+	core.auctions[1].CurrentPriceCents = 900
+	core.auctions[1].CapPriceCents = 1000
+	core.bids = []model.Bid{{ID: 9, AuctionID: 1, UserID: 2, AmountCents: 900, Accepted: true}}
+
+	_, err := svc.SubmitBuyerBid(context.Background(), 1, agent.ID, AgentBidInput{
+		AuctionID:      1,
+		AmountCents:    1000,
+		IdempotencyKey: "idem-threshold",
+		TraceID:        "trace-threshold",
+	})
+	if !errors.Is(err, ErrAgentNeedsUserConfirmation) {
+		t.Fatalf("expected ErrAgentNeedsUserConfirmation, got %v", err)
+	}
+	if bidder.calls != 0 {
+		t.Fatalf("approval threshold guard must not call bidder, calls=%d", bidder.calls)
+	}
+	if !store.hasAudit("agent.bid.guard_blocked") {
+		t.Fatal("expected guard blocked audit")
+	}
+	state, err := svc.sessionStore.Get(context.Background(), agent.ID, 1)
+	if err != nil {
+		t.Fatalf("session Get() error = %v", err)
+	}
+	if state == nil || state.PlanState != PlanStateNeedsUserConfirm {
+		t.Fatalf("expected needs_user_confirm STM, got %+v", state)
+	}
+}
+
+func TestSubmitBuyerBidBlocksAvoidKeywordRule(t *testing.T) {
+	svc, store, core, bidder := newAgentTestHarness()
+	agent := seedAgent(store, 1, AgentTypeBuyer, AgentStatusActive, 1000)
+	core.products[1].Description = "green jade with crack"
+	value, _ := json.Marshal([]string{"crack"})
+	_ = store.EnsureBiddingRule(context.Background(), &model.AgentBiddingRule{
+		UserID:    1,
+		Scope:     RuleScopeGlobal,
+		RuleType:  RuleTypeAvoidKeyword,
+		ValueJSON: string(value),
+		Source:    "user_defined",
+		Enabled:   true,
+	})
+
+	_, err := svc.SubmitBuyerBid(context.Background(), 1, agent.ID, AgentBidInput{
+		AuctionID:      1,
+		AmountCents:    200,
+		IdempotencyKey: "idem-avoid",
+	})
+	if !errors.Is(err, service.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+	if bidder.calls != 0 {
+		t.Fatalf("avoid keyword guard must not call bidder, calls=%d", bidder.calls)
+	}
+}
+
 func TestSubmitBuyerBidIdempotencySkipsBidder(t *testing.T) {
 	svc, store, _, bidder := newAgentTestHarness()
 	_ = seedAgent(store, 1, AgentTypeBuyer, AgentStatusActive, 1000)
@@ -273,6 +340,44 @@ func TestCreatePactAndApproveRequiresAddress(t *testing.T) {
 	}
 	if !store.hasAudit("pact.approved") {
 		t.Fatal("expected pact.approved audit")
+	}
+	if len(store.episodes) != 1 || store.episodes[0].Outcome != "approved" {
+		t.Fatalf("expected approved episode summary, got %+v", store.episodes)
+	}
+}
+
+func TestRejectPactCreatesNearBudgetEpisodeRecommendation(t *testing.T) {
+	svc, store, core, _ := newAgentTestHarness()
+	core.auctions[1].Status = "sold"
+	core.orders[1].FinalPriceCents = 950
+	core.products[1].Name = "jade pendant"
+	agent := seedAgent(store, 1, AgentTypeBuyer, AgentStatusActive, 1000)
+	_ = store.CreateBidAttempt(context.Background(), &model.AgentBidAttempt{
+		AgentID:        agent.ID,
+		BuyerID:        1,
+		AuctionID:      1,
+		AmountCents:    950,
+		IdempotencyKey: "idem-reject-win",
+		TraceID:        "trace-reject-win",
+		Result:         "accepted",
+	})
+	pact, err := svc.CreatePactFromWin(context.Background(), agent.ID, 1, "trace-reject-win")
+	if err != nil {
+		t.Fatalf("CreatePactFromWin() error = %v", err)
+	}
+	_, err = svc.RejectPact(context.Background(), 1, pact.ID)
+	if err != nil {
+		t.Fatalf("RejectPact() error = %v", err)
+	}
+	if len(store.episodes) != 1 {
+		t.Fatalf("expected one episode, got %+v", store.episodes)
+	}
+	episode := store.episodes[0]
+	if episode.Outcome != "rejected" || episode.Category != "jade" {
+		t.Fatalf("unexpected episode: %+v", episode)
+	}
+	if !strings.Contains(episode.RecommendationJSON, "approval_threshold") {
+		t.Fatalf("expected threshold recommendation, got %s", episode.RecommendationJSON)
 	}
 }
 
@@ -454,6 +559,8 @@ type memoryStore struct {
 	attempts []*model.AgentBidAttempt
 	pacts    map[uint64]*model.AgentPact
 	audits   []*model.AgentAuditLog
+	rules    []*model.AgentBiddingRule
+	episodes []*model.AgentEpisodeSummary
 	outbox   []*model.OutboxEvent
 	jobs     []*model.MerchantAgentJob
 	nextID   uint64
@@ -643,6 +750,10 @@ func (s *memoryStore) UpdatePact(_ context.Context, pact *model.AgentPact) error
 }
 
 func (s *memoryStore) CreateAuditLog(_ context.Context, log *model.AgentAuditLog) error {
+	if log.ID == 0 {
+		log.ID = s.nextID
+		s.nextID++
+	}
 	cp := *log
 	s.audits = append(s.audits, &cp)
 	return nil
@@ -656,6 +767,51 @@ func (s *memoryStore) ListAuditLogs(_ context.Context, agentID uint64, _ int) ([
 		}
 	}
 	return logs, nil
+}
+
+func (s *memoryStore) EnsureBiddingRule(_ context.Context, rule *model.AgentBiddingRule) error {
+	for _, existing := range s.rules {
+		if existing.UserID == rule.UserID && existing.Scope == rule.Scope && existing.RuleType == rule.RuleType {
+			return nil
+		}
+	}
+	if rule.ID == 0 {
+		rule.ID = s.nextID
+		s.nextID++
+	}
+	cp := *rule
+	s.rules = append(s.rules, &cp)
+	return nil
+}
+
+func (s *memoryStore) ListBiddingRules(_ context.Context, userID uint64) ([]model.AgentBiddingRule, error) {
+	var rules []model.AgentBiddingRule
+	for _, rule := range s.rules {
+		if rule.UserID == userID && rule.Enabled {
+			rules = append(rules, *rule)
+		}
+	}
+	return rules, nil
+}
+
+func (s *memoryStore) CreateEpisodeSummary(_ context.Context, summary *model.AgentEpisodeSummary) error {
+	if summary.ID == 0 {
+		summary.ID = s.nextID
+		s.nextID++
+	}
+	cp := *summary
+	s.episodes = append(s.episodes, &cp)
+	return nil
+}
+
+func (s *memoryStore) ListEpisodeSummaries(_ context.Context, agentID uint64, _ int) ([]model.AgentEpisodeSummary, error) {
+	var episodes []model.AgentEpisodeSummary
+	for _, episode := range s.episodes {
+		if agentID == 0 || episode.AgentID == agentID {
+			episodes = append(episodes, *episode)
+		}
+	}
+	return episodes, nil
 }
 
 func (s *memoryStore) CreateOutboxEvent(_ context.Context, evt *model.OutboxEvent) error {

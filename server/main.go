@@ -140,6 +140,9 @@ func main() {
 		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
 		agentStore := agentpkg.NewGormStore(database)
 		agentService := agentpkg.NewService(agentStore, adminStore, publicService)
+		if redisClients != nil && redisClients.Master != nil {
+			agentService.SetSessionStore(agentpkg.NewRedisSessionStore(redisClients.Master))
+		}
 
 		// 启动常驻买家 Agent Runner：周期扫描 running 竞拍、按策略自动出价、补建 Pact。
 		if cfg.AgentRunnerEnabled {

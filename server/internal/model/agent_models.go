@@ -84,6 +84,35 @@ type AgentAuditLog struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// AgentBiddingRule stores user-visible bidding authorization rules. Rules are
+// context for the agent; BidGuard still enforces the hard boundary.
+type AgentBiddingRule struct {
+	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    uint64    `gorm:"not null;index;uniqueIndex:idx_agent_rule" json:"userId"`
+	Scope     string    `gorm:"size:64;not null;default:global;uniqueIndex:idx_agent_rule" json:"scope"`
+	RuleType  string    `gorm:"size:64;not null;uniqueIndex:idx_agent_rule" json:"ruleType"`
+	ValueJSON string    `gorm:"type:text;not null" json:"valueJson"`
+	Source    string    `gorm:"size:32;not null;index" json:"source"`
+	Enabled   bool      `gorm:"not null;default:true;index" json:"enabled"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// AgentEpisodeSummary compresses a completed agent-assisted auction into a
+// lightweight explanation and optional user-approved rule recommendation.
+type AgentEpisodeSummary struct {
+	ID                 uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	AgentID            uint64    `gorm:"not null;index" json:"agentId"`
+	UserID             uint64    `gorm:"not null;index" json:"userId"`
+	AuctionID          uint64    `gorm:"not null;index" json:"auctionId"`
+	Category           string    `gorm:"size:64;index" json:"category"`
+	Outcome            string    `gorm:"size:32;not null;index" json:"outcome"`
+	Summary            string    `gorm:"type:text;not null" json:"summary"`
+	DerivedSignalJSON  string    `gorm:"type:text;not null" json:"derivedSignalJson"`
+	RecommendationJSON string    `gorm:"type:text;not null" json:"recommendationJson"`
+	TraceID            string    `gorm:"size:64;not null;index" json:"traceId"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
 
 // MerchantAgentJob records merchant operations performed by merchant ops agents.
 type MerchantAgentJob struct {

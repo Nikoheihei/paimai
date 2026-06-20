@@ -55,18 +55,26 @@ type Bidder interface {
 
 // Service coordinates the agent layer without mutating core auction state directly.
 type Service struct {
-	store  Store
-	core   CoreReader
-	bidder Bidder
-	now    func() time.Time
+	store        Store
+	core         CoreReader
+	bidder       Bidder
+	sessionStore SessionStateStore
+	now          func() time.Time
 }
 
 func NewService(store Store, core CoreReader, bidder Bidder) *Service {
 	return &Service{
-		store:  store,
-		core:   core,
-		bidder: bidder,
-		now:    time.Now,
+		store:        store,
+		core:         core,
+		bidder:       bidder,
+		sessionStore: NewMemorySessionStore(),
+		now:          time.Now,
+	}
+}
+
+func (s *Service) SetSessionStore(store SessionStateStore) {
+	if store != nil {
+		s.sessionStore = store
 	}
 }
 
@@ -130,6 +138,9 @@ type MerchantReportInput struct {
 func (s *Service) CreateBuyerAgent(ctx context.Context, buyerID uint64, input CreateBuyerAgentInput) (*model.AgentProfile, error) {
 	if buyerID == 0 {
 		return nil, service.ErrUnauthorized
+	}
+	if err := s.ensureDefaultBiddingRules(ctx, buyerID); err != nil {
+		return nil, err
 	}
 	traceID := newTraceID()
 	// 意图解析只负责把自然语言翻译成结构化 skill；运行时只执行 skill 模板。
@@ -261,12 +272,17 @@ func (s *Service) SubmitBuyerBid(ctx context.Context, buyerID, agentID uint64, i
 	if err := s.ensureProductMatches(agent, product); err != nil {
 		return nil, err
 	}
+	policy, err := s.loadBiddingPolicy(ctx, buyerID)
+	if err != nil {
+		return nil, err
+	}
 	bids, err := s.core.ListAuctionBids(ctx, auction.ID, 1000)
 	if err != nil {
 		return nil, err
 	}
 	decision := DecideBid(agent, auction, product, bids)
 	if !decision.ShouldBid {
+		s.saveSessionState(ctx, buildSessionState(agent, auction, skill, policy, PlanStateWatching, []string{"agent_decision:wait"}, nil), sessionTTL(auction, s.now))
 		return nil, fmt.Errorf("%w: strategy refused bid: %s", service.ErrInvalidInput, decision.Reason)
 	}
 	if input.AmountCents != decision.AmountCents {
@@ -283,9 +299,34 @@ func (s *Service) SubmitBuyerBid(ctx context.Context, buyerID, agentID uint64, i
 	if bidAmount > agent.MaxBudgetCents {
 		return nil, fmt.Errorf("%w: bid exceeds agent max budget", service.ErrInvalidInput)
 	}
-	if err := s.enforceStrategyBidGuards(ctx, agent, auction, bidAmount, skill); err != nil {
+	if err := s.checkBidGuard(ctx, bidGuardInput{
+		Agent:     agent,
+		Auction:   auction,
+		Product:   product,
+		Skill:     skill,
+		BidAmount: bidAmount,
+		Policy:    policy,
+	}); err != nil {
+		planState := PlanStateStoppedByGuard
+		riskFlags := []string{"guard_blocked"}
+		if errors.Is(err, ErrAgentNeedsUserConfirmation) {
+			planState = PlanStateNeedsUserConfirm
+			riskFlags = []string{"approval_threshold_reached"}
+		}
+		s.saveSessionState(ctx, buildSessionState(agent, auction, skill, policy, planState, []string{
+			fmt.Sprintf("agent_decision:blocked:%d", bidAmount),
+		}, riskFlags), sessionTTL(auction, s.now))
+		_ = s.audit(ctx, traceID, &agent.ID, buyerID, "agent.bid.guard_blocked", "agent_system", map[string]interface{}{
+			"auctionId": auction.ID,
+			"amount":    bidAmount,
+			"reason":    err.Error(),
+			"planState": planState,
+		})
 		return nil, err
 	}
+	s.saveSessionState(ctx, buildSessionState(agent, auction, skill, policy, PlanStateEligibleToBid, []string{
+		fmt.Sprintf("agent_decision:bid:%d", bidAmount),
+	}, nil), sessionTTL(auction, s.now))
 
 	match := buildMatch(agent, auction, product, traceID)
 	if err := s.store.UpsertMatch(ctx, match); err != nil {
@@ -476,6 +517,7 @@ func (s *Service) ApprovePact(ctx context.Context, buyerID, pactID uint64, input
 		"orderId": pact.OrderID,
 		"buyerId": buyerID,
 	})
+	s.createEpisodeSummaryFromPact(ctx, pact, "approved")
 	return pact, nil
 }
 
@@ -508,6 +550,7 @@ func (s *Service) RejectPact(ctx context.Context, buyerID, pactID uint64) (*mode
 		"orderId": pact.OrderID,
 		"buyerId": buyerID,
 	})
+	s.createEpisodeSummaryFromPact(ctx, pact, "rejected")
 	return pact, nil
 }
 
