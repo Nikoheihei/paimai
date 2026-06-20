@@ -45,6 +45,8 @@ func InitDB(dsn string) (*gorm.DB, error) {
 		&model.AgentBidAttempt{},
 		&model.AgentPact{},
 		&model.AgentAuditLog{},
+		&model.AgentBiddingRule{},
+		&model.AgentEpisodeSummary{},
 		&model.MerchantAgentJob{},
 	)
 	if err != nil {

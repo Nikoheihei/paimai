@@ -37,31 +37,31 @@ const (
 // --- 出价节奏（Pace）：决定出价金额的计算方式 ---
 
 const (
-	PaceMinStep  = "min_step"  // 最小步长：当前价 + 加价幅度
-	PaceReserve  = "reserve"   // 保留价优先：先一次出到保留价，再按最小步长跟
+	PaceMinStep = "min_step" // 最小步长：当前价 + 加价幅度
+	PaceReserve = "reserve"  // 保留价优先：先一次出到保留价，再按最小步长跟
 )
 
 // --- 停止条件（StopAt）：决定何时停止出价 ---
 
 const (
-	StopAtBudget     = "budget"      // 到达预算上限时停止
-	StopAtRatio      = "ratio"       // 到达预算的X%时停止（0-1）
+	StopAtBudget = "budget" // 到达预算上限时停止
+	StopAtRatio  = "ratio"  // 到达预算的X%时停止（0-1）
 )
 
 // StrategySkill is the runtime contract for buyer-agent bidding. LLM and
 // natural-language parsing may fill this shape, but only this deterministic
 // template is allowed to drive bids.
 type StrategySkill struct {
-	Prompt          string              `json:"prompt,omitempty"`
-	ProductKeywords []string            `json:"productKeywords,omitempty"`
-	BuyerID         uint64              `json:"buyerId"`
-	RoomID          uint64              `json:"roomId,omitempty"`
-	AuctionID       uint64              `json:"auctionId,omitempty"`
-	MaxBudgetCents  int64               `json:"maxBudgetCents"`
-	Strategy        string              `json:"strategy"` // 保留旧字段，兼容已存储数据
-	MaxBidTimes     int                 `json:"maxBidTimes"`
-	MinIntervalMs   int64               `json:"minIntervalMs"`
-	RequireHumanPay bool                `json:"requireHumanPay"`
+	Prompt          string   `json:"prompt,omitempty"`
+	ProductKeywords []string `json:"productKeywords,omitempty"`
+	BuyerID         uint64   `json:"buyerId"`
+	RoomID          uint64   `json:"roomId,omitempty"`
+	AuctionID       uint64   `json:"auctionId,omitempty"`
+	MaxBudgetCents  int64    `json:"maxBudgetCents"`
+	Strategy        string   `json:"strategy"` // 保留旧字段，兼容已存储数据
+	MaxBidTimes     int      `json:"maxBidTimes"`
+	MinIntervalMs   int64    `json:"minIntervalMs"`
+	RequireHumanPay bool     `json:"requireHumanPay"`
 
 	// --- 新3维度字段 ---
 
@@ -190,8 +190,11 @@ func buildStrategySkill(buyerID uint64, input CreateBuyerAgentInput, parsed Pars
 	// 回填新维度字段（从旧策略名推导）
 	skill.resolveDimensionalFields()
 
-	// 如果新维度字段已就位，用它们重新推导策略名
-	if skill.Trigger != "" && skill.Pace != "" {
+	// 如果新维度字段已就位，用它们重新推导策略名；cap_only 必须保留旧策略名，
+	// 因为它有 over-budget 语义，不能被 lead/min_step 覆盖。
+	if legacyStrategy == StrategyCapOnly {
+		skill.Strategy = StrategyCapOnly
+	} else if skill.Trigger != "" && skill.Pace != "" {
 		skill.Strategy = deriveStrategyName(skill.Trigger, skill.Pace, skill.StopRatio)
 	} else if skill.Strategy == "" {
 		skill.Strategy = DefaultStrategy
@@ -211,6 +214,10 @@ func buildStrategySkill(buyerID uint64, input CreateBuyerAgentInput, parsed Pars
 	// 自定义文本保留
 	if input.CustomText != "" {
 		skill.CustomText = strings.TrimSpace(input.CustomText)
+		if strings.Contains(skill.CustomText, "跟价") || strings.Contains(strings.ToLower(skill.CustomText), "follow") {
+			skill.Custom.FollowUp = true
+			skill.Trigger = TriggerFollow
+		}
 	} else if parsed.CustomText != "" {
 		skill.CustomText = parsed.CustomText
 	}
