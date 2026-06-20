@@ -5,7 +5,7 @@ services:
     restart: always
     environment:
       MYSQL_DATABASE: paimai
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-rootpassword}"
     ports:
       - "13308:3306"
     volumes:
@@ -48,10 +48,10 @@ services:
       - "16060:6060"
     environment:
       SERVER_PORT: "8080"
-      MYSQL_DSN: "root:rootpassword@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
+      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-rootpassword}@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_MASTER_ADDR: "redis-master:6379"
       REDIS_SLAVE_ADDR: "redis-slave:6379"
-      JWT_SECRET: "paimai_dev_secret_2026"
+      JWT_SECRET: "${JWT_SECRET:-change_me_in_production}"
     depends_on:
       mysql:
         condition: service_healthy
