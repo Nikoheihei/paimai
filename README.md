@@ -392,12 +392,6 @@ This project is licensed under the MIT License.
 
 ---
 
-## Acknowledgments
-
-Built for the **Tencent Cloud AI Application Innovation Competition**.
-
----
-
 # 中文版
 
 # 实时拍卖大师
@@ -622,7 +616,3 @@ created -> approved
 ## License
 
 本项目使用 MIT License。
-
-## 致谢
-
-项目为 **腾讯云 AI 应用创新大赛** 构建。
