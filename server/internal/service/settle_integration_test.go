@@ -161,7 +161,7 @@ func TestPayOrderIntegration(t *testing.T) {
 		t.Fatalf("SettleAuction() error = %v", err)
 	}
 
-	order, err := settleSvc.PayOrder(ctx, *result.OrderID)
+	order, err := settleSvc.PayOrder(ctx, *result.OrderID, PayOrderInput{})
 	if err != nil {
 		t.Fatalf("PayOrder() error = %v", err)
 	}
@@ -170,7 +170,7 @@ func TestPayOrderIntegration(t *testing.T) {
 	}
 
 	// 幂等
-	order2, err := settleSvc.PayOrder(ctx, *result.OrderID)
+	order2, err := settleSvc.PayOrder(ctx, *result.OrderID, PayOrderInput{})
 	if err != nil {
 		t.Fatalf("PayOrder() idempotent error = %v", err)
 	}
@@ -308,10 +308,10 @@ func setupSettleTestData(t *testing.T, db *gorm.DB, now time.Time, bidAmount int
 
 	if bidAmount > 0 {
 		bid := &model.Bid{
-			AuctionID:         auction.ID,
-			UserID:            buyer.ID,
-			AmountCents:       bidAmount,
-			IdempotencyKey:    "settle-int-" + t.Name(),
+			AuctionID:      auction.ID,
+			UserID:         buyer.ID,
+			AmountCents:    bidAmount,
+			IdempotencyKey: "settle-int-" + t.Name(),
 		}
 		if err := db.Create(bid).Error; err != nil {
 			t.Fatalf("创建出价记录失败: %v", err)
