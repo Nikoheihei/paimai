@@ -134,7 +134,7 @@ func TestPayBuyerOrderOwnershipIntegration(t *testing.T) {
 	db.Model(&model.Order{}).Where("id = ?", *result.OrderID).Update("buyer_id", buyerA.ID)
 
 	// 买家B尝试支付买家A的订单
-	_, err = publicSvc.PayBuyerOrder(ctx, *result.OrderID, buyerB.ID)
+	_, err = publicSvc.PayBuyerOrder(ctx, *result.OrderID, buyerB.ID, PayOrderInput{})
 	if err == nil {
 		t.Errorf("expected error when buyerB pays buyerA's order")
 	}
@@ -143,7 +143,7 @@ func TestPayBuyerOrderOwnershipIntegration(t *testing.T) {
 	}
 
 	// 买家A 正常支付自己订单
-	order, err := publicSvc.PayBuyerOrder(ctx, *result.OrderID, buyerA.ID)
+	order, err := publicSvc.PayBuyerOrder(ctx, *result.OrderID, buyerA.ID, PayOrderInput{})
 	if err != nil {
 		t.Fatalf("buyerA PayBuyerOrder() error = %v", err)
 	}
@@ -228,7 +228,7 @@ func TestListBuyerOrdersOnlySelfIntegration(t *testing.T) {
 	publicSvc := NewPublicService(publicStore, adminStore, nil, nil, settleSvc)
 
 	// buyerA 只看自己的订单
-	ordersA, err := publicSvc.ListBuyerOrders(ctx, buyerA.ID)
+	ordersA, err := publicSvc.ListBuyerOrders(ctx, buyerA.ID, 0)
 	if err != nil {
 		t.Fatalf("ListBuyerOrders A error = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestListBuyerOrdersOnlySelfIntegration(t *testing.T) {
 	}
 
 	// buyerB 只看自己的订单
-	ordersB, err := publicSvc.ListBuyerOrders(ctx, buyerB.ID)
+	ordersB, err := publicSvc.ListBuyerOrders(ctx, buyerB.ID, 0)
 	if err != nil {
 		t.Fatalf("ListBuyerOrders B error = %v", err)
 	}

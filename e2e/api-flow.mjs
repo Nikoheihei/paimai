@@ -129,38 +129,23 @@ async function main() {
     json: { username: sellerUsername, password, role: 'seller' },
   });
   assert('商家注册', r.ok && r.data?.code === 0, `status=${r.status}`);
-  const sellerId = r.data?.data?.user?.id || r.data?.data?.id;
+  const sellerToken = r.data?.data?.token;
+  const sellerId = r.data?.data?.userId || r.data?.data?.user?.id || r.data?.data?.id;
+  assert('商家注册返回 token', !!sellerToken, 'token 为空');
 
   r = await request('POST', '/api/auth/register', {
     json: { username: buyer1Username, password, role: 'buyer' },
   });
   assert('买家1注册', r.ok && r.data?.code === 0, `status=${r.status}`);
+  const buyer1Token = r.data?.data?.token;
+  assert('买家1注册返回 token', !!buyer1Token, 'token 为空');
 
   r = await request('POST', '/api/auth/register', {
     json: { username: buyer2Username, password, role: 'buyer' },
   });
   assert('买家2注册', r.ok && r.data?.code === 0, `status=${r.status}`);
-
-  // 登录获取 token
-  let sellerToken, buyer1Token, buyer2Token;
-
-  r = await request('POST', '/api/auth/login', {
-    json: { username: sellerUsername, password },
-  });
-  sellerToken = r.data?.data?.token;
-  assert('商家登录取 token', !!sellerToken, 'token 为空');
-
-  r = await request('POST', '/api/auth/login', {
-    json: { username: buyer1Username, password },
-  });
-  buyer1Token = r.data?.data?.token;
-  assert('买家1登录取 token', !!buyer1Token);
-
-  r = await request('POST', '/api/auth/login', {
-    json: { username: buyer2Username, password },
-  });
-  buyer2Token = r.data?.data?.token;
-  assert('买家2登录取 token', !!buyer2Token);
+  const buyer2Token = r.data?.data?.token;
+  assert('买家2注册返回 token', !!buyer2Token, 'token 为空');
 
   // 通过 /api/auth/me 获取实际 user ID（用于出价）
   const buyer1Id = await getMyId(buyer1Token);

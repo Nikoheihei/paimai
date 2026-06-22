@@ -172,7 +172,7 @@ func (s *PublicService) GetRanking(ctx context.Context, auctionID uint64, limit 
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	if s.redis != nil && s.redis.Master != nil {
+	if s.redis != nil && (s.redis.Slave != nil || s.redis.Master != nil) {
 		items, err := s.rankingFromRedis(ctx, auctionID, limit)
 		if err == nil && len(items) > 0 {
 			// 按金额降序排序后分配 Rank（不依赖 Redis 返回顺序）
@@ -424,7 +424,11 @@ func (s *PublicService) PlaceBid(ctx context.Context, auctionID uint64, input Bi
 // rankingFromRedis 从 Redis ZSET 读取排行榜热数据，返回结果按金额降序排列。
 func (s *PublicService) rankingFromRedis(ctx context.Context, auctionID uint64, limit int) ([]RankingItem, error) {
 	key := fmt.Sprintf("auction:%d:bids", auctionID)
-	values, err := s.redis.Master.ZRevRangeWithScores(ctx, key, 0, int64(limit-1)).Result()
+	client := s.redis.Slave
+	if client == nil {
+		client = s.redis.Master
+	}
+	values, err := client.ZRevRangeWithScores(ctx, key, 0, int64(limit-1)).Result()
 	if err != nil {
 		return nil, err
 	}

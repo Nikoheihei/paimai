@@ -73,7 +73,8 @@ type AdminStore interface {
 
 // GormAdminStore 是基于 GORM 的 AdminStore 实现。
 type GormAdminStore struct {
-	db *gorm.DB
+	readDB  *gorm.DB
+	writeDB *gorm.DB
 }
 
 // NewGormAdminStore 创建 GORM 版本的数据访问对象。
@@ -83,12 +84,16 @@ type txGormAdminStore struct {
 }
 
 func NewGormAdminStore(db *gorm.DB) *GormAdminStore {
-	return &GormAdminStore{db: db}
+	return NewGormAdminStoreWithRouter(db, db)
+}
+
+func NewGormAdminStoreWithRouter(readDB, writeDB *gorm.DB) *GormAdminStore {
+	return &GormAdminStore{readDB: readDB, writeDB: writeDB}
 }
 
 // WithTx 在事务中执行 fn。
 func (s *GormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return s.writeDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txStore := &txGormAdminStore{db: tx}
 		return fn(txStore)
 	})
@@ -356,12 +361,12 @@ func (s *txGormAdminStore) WithTx(ctx context.Context, fn func(AdminStore) error
 }
 
 func (s *GormAdminStore) CreateProduct(ctx context.Context, product *model.Product) error {
-	return s.db.WithContext(ctx).Create(product).Error
+	return s.writeDB.WithContext(ctx).Create(product).Error
 }
 
 func (s *GormAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]model.Product, error) {
 	var products []model.Product
-	query := s.db.WithContext(ctx).Order("id DESC")
+	query := s.readDB.WithContext(ctx).Order("id DESC")
 	if sellerID != nil {
 		query = query.Where("seller_id = ?", *sellerID)
 	}
@@ -373,7 +378,7 @@ func (s *GormAdminStore) ListProducts(ctx context.Context, sellerID *uint64) ([]
 
 func (s *GormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
 	var product model.Product
-	if err := s.db.WithContext(ctx).First(&product, id).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).First(&product, id).Error; err != nil {
 		return nil, err
 	}
 	return &product, nil
@@ -381,7 +386,7 @@ func (s *GormAdminStore) GetProduct(ctx context.Context, id uint64) (*model.Prod
 
 func (s *GormAdminStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	var bids []model.Bid
-	query := s.db.WithContext(ctx).Where("auction_id = ? AND accepted = ?", auctionID, true).Order("amount_cents DESC, server_ts ASC")
+	query := s.writeDB.WithContext(ctx).Where("auction_id = ? AND accepted = ?", auctionID, true).Order("amount_cents DESC, server_ts ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
@@ -391,7 +396,7 @@ func (s *GormAdminStore) ListAuctionBids(ctx context.Context, auctionID uint64, 
 	return bids, nil
 }
 func (s *GormAdminStore) UpdateProduct(ctx context.Context, product *model.Product) error {
-	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", product.ID).Updates(map[string]interface{}{
+	return s.writeDB.WithContext(ctx).Model(&model.Product{}).Where("id = ?", product.ID).Updates(map[string]interface{}{
 		"name":        product.Name,
 		"image_url":   product.ImageURL,
 		"description": product.Description,
@@ -400,27 +405,27 @@ func (s *GormAdminStore) UpdateProduct(ctx context.Context, product *model.Produ
 }
 
 func (s *GormAdminStore) UpdateProductStatus(ctx context.Context, id uint64, status string) error {
-	return s.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
+	return s.writeDB.WithContext(ctx).Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (s *GormAdminStore) DeleteProduct(ctx context.Context, id uint64) error {
-	return s.db.WithContext(ctx).Delete(&model.Product{}, id).Error
+	return s.writeDB.WithContext(ctx).Delete(&model.Product{}, id).Error
 }
 
 func (s *GormAdminStore) CreateAuction(ctx context.Context, auction *model.Auction) error {
-	return s.db.WithContext(ctx).Create(auction).Error
+	return s.writeDB.WithContext(ctx).Create(auction).Error
 }
 
 func (s *GormAdminStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
 	var auction model.Auction
-	if err := s.db.WithContext(ctx).First(&auction, id).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).First(&auction, id).Error; err != nil {
 		return nil, err
 	}
 	return &auction, nil
 }
 
 func (s *GormAdminStore) UpdateAuction(ctx context.Context, auction *model.Auction) error {
-	result := s.db.WithContext(ctx).
+	result := s.writeDB.WithContext(ctx).
 		Model(&model.Auction{}).
 		Where("id = ? AND version = ?", auction.ID, auction.Version).
 		Updates(map[string]interface{}{
@@ -443,7 +448,7 @@ func (s *GormAdminStore) UpdateAuction(ctx context.Context, auction *model.Aucti
 
 func (s *GormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter) ([]model.Auction, error) {
 	var auctions []model.Auction
-	query := s.db.WithContext(ctx).Order("id DESC")
+	query := s.readDB.WithContext(ctx).Order("id DESC")
 	if filter.RoomID != nil {
 		query = query.Where("room_id = ?", *filter.RoomID)
 	}
@@ -457,28 +462,28 @@ func (s *GormAdminStore) ListAuctions(ctx context.Context, filter AuctionFilter)
 }
 
 func (s *GormAdminStore) CreateRoom(ctx context.Context, room *model.LiveRoom) error {
-	return s.db.WithContext(ctx).Create(room).Error
+	return s.writeDB.WithContext(ctx).Create(room).Error
 }
 
 func (s *GormAdminStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
 	var room model.LiveRoom
-	if err := s.db.WithContext(ctx).First(&room, id).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).First(&room, id).Error; err != nil {
 		return nil, err
 	}
 	return &room, nil
 }
 
 func (s *GormAdminStore) UpdateRoom(ctx context.Context, room *model.LiveRoom) error {
-	return s.db.WithContext(ctx).Save(room).Error
+	return s.writeDB.WithContext(ctx).Save(room).Error
 }
 
 func (s *GormAdminStore) DeleteRoom(ctx context.Context, id uint64) error {
-	return s.db.WithContext(ctx).Delete(&model.LiveRoom{}, id).Error
+	return s.writeDB.WithContext(ctx).Delete(&model.LiveRoom{}, id).Error
 }
 
 func (s *GormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64) ([]model.LiveRoom, error) {
 	var rooms []model.LiveRoom
-	if err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&rooms).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&rooms).Error; err != nil {
 		return nil, err
 	}
 	return rooms, nil
@@ -486,7 +491,7 @@ func (s *GormAdminStore) ListRoomsBySeller(ctx context.Context, sellerID uint64)
 
 func (s *GormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
 	var user model.User
-	if err := s.db.WithContext(ctx).First(&user, id).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).First(&user, id).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
@@ -494,19 +499,19 @@ func (s *GormAdminStore) GetUser(ctx context.Context, id uint64) (*model.User, e
 
 func (s *GormAdminStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
 	var auth model.UserAuth
-	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
 		return "", err
 	}
 	return auth.Username, nil
 }
 
 func (s *GormAdminStore) CreateOrder(ctx context.Context, order *model.Order) error {
-	return s.db.WithContext(ctx).Create(order).Error
+	return s.writeDB.WithContext(ctx).Create(order).Error
 }
 
 func (s *GormAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
 	var order model.Order
-	if err := s.db.WithContext(ctx).First(&order, id).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).First(&order, id).Error; err != nil {
 		return nil, err
 	}
 	return &order, nil
@@ -514,19 +519,19 @@ func (s *GormAdminStore) GetOrder(ctx context.Context, id uint64) (*model.Order,
 
 func (s *GormAdminStore) GetOrderByAuction(ctx context.Context, auctionID uint64) (*model.Order, error) {
 	var order model.Order
-	if err := s.db.WithContext(ctx).Where("auction_id = ?", auctionID).First(&order).Error; err != nil {
+	if err := s.writeDB.WithContext(ctx).Where("auction_id = ?", auctionID).First(&order).Error; err != nil {
 		return nil, err
 	}
 	return &order, nil
 }
 
 func (s *GormAdminStore) UpdateOrder(ctx context.Context, order *model.Order) error {
-	return s.db.WithContext(ctx).Save(order).Error
+	return s.writeDB.WithContext(ctx).Save(order).Error
 }
 
 func (s *GormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) {
 	var orders []model.Order
-	if err := s.db.WithContext(ctx).Order("id DESC").Find(&orders).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	return orders, nil
@@ -534,7 +539,7 @@ func (s *GormAdminStore) ListOrders(ctx context.Context) ([]model.Order, error) 
 
 func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64) ([]model.Order, error) {
 	var orders []model.Order
-	if err := s.db.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&orders).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("seller_id = ?", sellerID).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	return orders, nil
@@ -542,7 +547,7 @@ func (s *GormAdminStore) ListOrdersBySeller(ctx context.Context, sellerID uint64
 
 func (s *GormAdminStore) ListOrdersByBuyer(ctx context.Context, buyerID uint64) ([]model.Order, error) {
 	var orders []model.Order
-	if err := s.db.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	return orders, nil
@@ -559,7 +564,7 @@ func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, statu
 	if addressSnapshot != "" {
 		updates["address_snapshot"] = addressSnapshot
 	}
-	result := s.db.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates)
+	result := s.writeDB.WithContext(ctx).Model(&model.Order{}).Where("id = ? AND status = ?", id, "pending_payment").Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -571,7 +576,7 @@ func (s *GormAdminStore) UpdateOrderStatus(ctx context.Context, id uint64, statu
 
 func (s *GormAdminStore) ListExpiredPendingOrders(ctx context.Context, before time.Time, limit int) ([]model.Order, error) {
 	var orders []model.Order
-	query := s.db.WithContext(ctx).
+	query := s.writeDB.WithContext(ctx).
 		Where("status = ? AND created_at < ?", "pending_payment", before).
 		Order("id ASC")
 	if limit > 0 {
@@ -585,7 +590,7 @@ func (s *GormAdminStore) ListExpiredPendingOrders(ctx context.Context, before ti
 
 func (s *GormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]model.Auction, error) {
 	var auctions []model.Auction
-	if err := s.db.WithContext(ctx).
+	if err := s.writeDB.WithContext(ctx).
 		Where("status = ? AND end_at <= ?", "running", time.Now()).
 		Order("id ASC").
 		Find(&auctions).Error; err != nil {
@@ -595,11 +600,11 @@ func (s *GormAdminStore) ListRunningExpiredAuctions(ctx context.Context) ([]mode
 }
 
 func (s *GormAdminStore) CreateBid(ctx context.Context, bid *model.Bid) error {
-	return s.db.WithContext(ctx).Create(bid).Error
+	return s.writeDB.WithContext(ctx).Create(bid).Error
 }
 
 func (s *GormAdminStore) UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error {
-	result := s.db.WithContext(ctx).
+	result := s.writeDB.WithContext(ctx).
 		Model(&model.Auction{}).
 		Where("id = ? AND version = ?", auction.ID, auction.Version).
 		Updates(map[string]interface{}{
@@ -619,12 +624,12 @@ func (s *GormAdminStore) UpdateAuctionBidState(ctx context.Context, auction *mod
 }
 
 func (s *GormAdminStore) CreateOutboxEvent(ctx context.Context, evt *model.OutboxEvent) error {
-	return s.db.WithContext(ctx).Create(evt).Error
+	return s.writeDB.WithContext(ctx).Create(evt).Error
 }
 
 func (s *GormAdminStore) PickPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error) {
 	var events []model.OutboxEvent
-	if err := s.db.WithContext(ctx).
+	if err := s.writeDB.WithContext(ctx).
 		Where("status = ?", "pending").
 		Order("id ASC").
 		Limit(limit).
@@ -635,16 +640,16 @@ func (s *GormAdminStore) PickPendingOutboxEvents(ctx context.Context, limit int)
 }
 
 func (s *GormAdminStore) MarkOutboxEventDone(ctx context.Context, id uint64) error {
-	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "done").Error
+	return s.writeDB.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "done").Error
 }
 
 func (s *GormAdminStore) MarkOutboxEventFailed(ctx context.Context, id uint64) error {
-	return s.db.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
+	return s.writeDB.WithContext(ctx).Model(&model.OutboxEvent{}).Where("id = ?", id).Update("status", "failed").Error
 }
 
 func (s *GormAdminStore) HasActiveAuctionByProduct(ctx context.Context, productID uint64) (bool, error) {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&model.Auction{}).
+	err := s.writeDB.WithContext(ctx).Model(&model.Auction{}).
 		Where("product_id = ? AND status IN ?", productID,
 			[]string{string(statemachine.StateDraft), string(statemachine.StateScheduled), string(statemachine.StateRunning), string(statemachine.StateSold)}).
 		Count(&count).Error
@@ -652,14 +657,14 @@ func (s *GormAdminStore) HasActiveAuctionByProduct(ctx context.Context, productI
 }
 
 func (s *GormAdminStore) UpdateProductStock(ctx context.Context, productID uint64, delta int) error {
-	return s.db.WithContext(ctx).Model(&model.Product{}).
+	return s.writeDB.WithContext(ctx).Model(&model.Product{}).
 		Where("id = ?", productID).
 		Update("stock", gorm.Expr("stock + ?", delta)).Error
 }
 
 func (s *GormAdminStore) HasPendingPaymentOrder(ctx context.Context, productID uint64) (bool, error) {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&model.Order{}).
+	err := s.writeDB.WithContext(ctx).Model(&model.Order{}).
 		Joins("JOIN auctions ON orders.auction_id = auctions.id").
 		Where("auctions.product_id = ? AND orders.status = ?", productID, "pending_payment").
 		Count(&count).Error

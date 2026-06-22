@@ -49,6 +49,8 @@ services:
     environment:
       SERVER_PORT: "8080"
       MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-rootpassword}@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
+      MYSQL_WRITE_DSN: "root:${MYSQL_ROOT_PASSWORD:-rootpassword}@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
+      MYSQL_READ_DSN: "root:${MYSQL_ROOT_PASSWORD:-rootpassword}@tcp(mysql:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_MASTER_ADDR: "redis-master:6379"
       REDIS_SLAVE_ADDR: "redis-slave:6379"
       JWT_SECRET: "${JWT_SECRET:-change_me_in_production}"
