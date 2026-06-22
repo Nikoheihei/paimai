@@ -12,6 +12,7 @@
 ## Table of Contents
 
 - [Features](#features)
+- [Performance Test Results](#performance-test-results)
 - [System Architecture](#system-architecture)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
@@ -59,6 +60,10 @@
 - **State Machine Driven Transitions**: Auction (7 states), Order (3 states), Agent (5 states), Pact (4 states) — all governed by unified state machine
 - **Optimistic Locking**: Bid operations use version field for concurrency control
 - **Idempotency**: Every agent bid carries IdempotencyKey; duplicate requests return cached result
+
+## Performance Test Results
+
+See [Performance Test Results](docs/performance-test-results.md) for single-auction hotspot tests, multi-room capacity tests, WebSocket stability checks, controlled bottleneck experiments, and the final bottleneck analysis.
 
 ---
 
@@ -448,6 +453,10 @@ This project is licensed under the MIT License.
 - **状态机驱动**：拍卖、订单、代理、Pact 都由统一状态机约束。
 - **乐观锁**：竞价操作使用版本号处理并发冲突。
 - **幂等性**：代理出价携带 IdempotencyKey，重复请求返回缓存结果。
+
+## 压测结果
+
+详细压测数据见 [压测结果](docs/performance-test-results.md)，包含单拍卖热点、多房间容量、WebSocket 长连接、控制变量实验和系统瓶颈定位。
 
 ## 快速开始
 
