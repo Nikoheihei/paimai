@@ -29,18 +29,23 @@ type PublicStore interface {
 
 // GormPublicStore 是基于 GORM 的用户侧数据访问实现。
 type GormPublicStore struct {
-	db *gorm.DB
+	readDB  *gorm.DB
+	writeDB *gorm.DB
 }
 
 // NewGormPublicStore 创建 GORM 版本的用户侧数据访问对象。
 func NewGormPublicStore(db *gorm.DB) *GormPublicStore {
-	return &GormPublicStore{db: db}
+	return NewGormPublicStoreWithRouter(db, db)
+}
+
+func NewGormPublicStoreWithRouter(readDB, writeDB *gorm.DB) *GormPublicStore {
+	return &GormPublicStore{readDB: readDB, writeDB: writeDB}
 }
 
 // GetRoom 根据直播间 ID 查询直播间信息。
 func (s *GormPublicStore) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, error) {
 	var rooms []model.LiveRoom
-	if err := s.db.WithContext(ctx).Where("status = ?", "live").Order("id DESC").Find(&rooms).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("status = ?", "live").Order("id DESC").Find(&rooms).Error; err != nil {
 		return nil, err
 	}
 	return rooms, nil
@@ -48,7 +53,7 @@ func (s *GormPublicStore) ListLiveRooms(ctx context.Context) ([]model.LiveRoom, 
 
 func (s *GormPublicStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRoom, error) {
 	var room model.LiveRoom
-	if err := s.db.WithContext(ctx).First(&room, id).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).First(&room, id).Error; err != nil {
 		return nil, err
 	}
 	return &room, nil
@@ -57,7 +62,7 @@ func (s *GormPublicStore) GetRoom(ctx context.Context, id uint64) (*model.LiveRo
 // GetAuction 根据竞拍 ID 查询竞拍详情。
 func (s *GormPublicStore) GetAuction(ctx context.Context, id uint64) (*model.Auction, error) {
 	var auction model.Auction
-	if err := s.db.WithContext(ctx).First(&auction, id).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).First(&auction, id).Error; err != nil {
 		return nil, err
 	}
 	return &auction, nil
@@ -66,7 +71,7 @@ func (s *GormPublicStore) GetAuction(ctx context.Context, id uint64) (*model.Auc
 // ListRoomAuctions 查询指定直播间下的竞拍列表，可按状态过滤。
 func (s *GormPublicStore) ListRoomAuctions(ctx context.Context, roomID uint64, status string) ([]model.Auction, error) {
 	var auctions []model.Auction
-	query := s.db.WithContext(ctx).Where("room_id = ?", roomID).Order("id DESC")
+	query := s.readDB.WithContext(ctx).Where("room_id = ?", roomID).Order("id DESC")
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -78,12 +83,12 @@ func (s *GormPublicStore) ListRoomAuctions(ctx context.Context, roomID uint64, s
 
 // CreateBid 将一次有效出价写入数据库。
 func (s *GormPublicStore) CreateBid(ctx context.Context, bid *model.Bid) error {
-	return s.db.WithContext(ctx).Create(bid).Error
+	return s.writeDB.WithContext(ctx).Create(bid).Error
 }
 
 // UpdateAuctionBidState 更新竞拍当前价、领先用户、结束时间和状态。
 func (s *GormPublicStore) UpdateAuctionBidState(ctx context.Context, auction *model.Auction) error {
-	return s.db.WithContext(ctx).
+	return s.writeDB.WithContext(ctx).
 		Model(&model.Auction{}).
 		Where("id = ?", auction.ID).
 		Updates(map[string]interface{}{
@@ -98,7 +103,7 @@ func (s *GormPublicStore) UpdateAuctionBidState(ctx context.Context, auction *mo
 // ListAuctionBids 按金额倒序查询竞拍出价记录，用于数据库兜底排行榜。
 func (s *GormPublicStore) ListBuyerOrders(ctx context.Context, buyerID uint64) ([]model.Order, error) {
 	var orders []model.Order
-	if err := s.db.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("buyer_id = ?", buyerID).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	return orders, nil
@@ -106,7 +111,7 @@ func (s *GormPublicStore) ListBuyerOrders(ctx context.Context, buyerID uint64) (
 
 func (s *GormPublicStore) GetOrder(ctx context.Context, id uint64) (*model.Order, error) {
 	var order model.Order
-	if err := s.db.WithContext(ctx).First(&order, id).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).First(&order, id).Error; err != nil {
 		return nil, err
 	}
 	return &order, nil
@@ -114,7 +119,7 @@ func (s *GormPublicStore) GetOrder(ctx context.Context, id uint64) (*model.Order
 
 func (s *GormPublicStore) GetProduct(ctx context.Context, id uint64) (*model.Product, error) {
 	var p model.Product
-	if err := s.db.WithContext(ctx).First(&p, id).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).First(&p, id).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -122,7 +127,7 @@ func (s *GormPublicStore) GetProduct(ctx context.Context, id uint64) (*model.Pro
 
 func (s *GormPublicStore) GetUser(ctx context.Context, id uint64) (*model.User, error) {
 	var u model.User
-	if err := s.db.WithContext(ctx).First(&u, id).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).First(&u, id).Error; err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -130,7 +135,7 @@ func (s *GormPublicStore) GetUser(ctx context.Context, id uint64) (*model.User, 
 
 func (s *GormPublicStore) GetUsernameByUserID(ctx context.Context, id uint64) (string, error) {
 	var auth model.UserAuth
-	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Where("user_id = ?", id).First(&auth).Error; err != nil {
 		return "", err
 	}
 	return auth.Username, nil
@@ -138,7 +143,7 @@ func (s *GormPublicStore) GetUsernameByUserID(ctx context.Context, id uint64) (s
 
 func (s *GormPublicStore) ListAuctionBids(ctx context.Context, auctionID uint64, limit int) ([]model.Bid, error) {
 	var bids []model.Bid
-	query := s.db.WithContext(ctx).
+	query := s.readDB.WithContext(ctx).
 		Where("auction_id = ? AND accepted = ?", auctionID, true).
 		Order("amount_cents DESC, server_ts ASC")
 	if limit > 0 {

@@ -10,16 +10,62 @@ import (
 	"paimai/internal/model"
 )
 
+// Router keeps write and read handles explicit. Write is the only handle used
+// for migrations, commands, transactions, and post-write strong-consistency
+// reads. Read is for initial snapshots and eventually consistent list/detail
+// queries.
+type Router struct {
+	Write *gorm.DB
+	Read  *gorm.DB
+}
+
 // InitDB 初始化 GORM 数据库连接、配置连接池，并执行业务表结构自动迁移。
 func InitDB(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+	router, err := InitRouter(dsn, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return router.Write, nil
+}
+
+func InitRouter(writeDSN, readDSN string) (*Router, error) {
+	writeDB, err := openDB(writeDSN)
+	if err != nil {
+		return nil, err
+	}
+	if readDSN == "" {
+		readDSN = writeDSN
+	}
+
+	readDB := writeDB
+	if readDSN != writeDSN {
+		readDB, err = openDB(readDSN)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	log.Println("Migrating database schemas on write DB...")
+	if err := migrateSchemas(writeDB); err != nil {
+		return nil, err
+	}
+	if err := migrateCompatibility(writeDB); err != nil {
+		return nil, err
+	}
+
+	log.Println("Database router initialized successfully.")
+	return &Router{Write: writeDB, Read: readDB}, nil
+}
+
+func openDB(dsn string) (*gorm.DB, error) {
+	database, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	sqlDB, err := db.DB()
+	sqlDB, err := database.DB()
 	if err != nil {
 		return nil, err
 	}
@@ -29,8 +75,11 @@ func InitDB(dsn string) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	log.Println("Migrating database schemas...")
-	err = db.AutoMigrate(
+	return database, nil
+}
+
+func migrateSchemas(database *gorm.DB) error {
+	return database.AutoMigrate(
 		&model.User{},
 		&model.LiveRoom{},
 		&model.Product{},
@@ -49,16 +98,6 @@ func InitDB(dsn string) (*gorm.DB, error) {
 		&model.AgentEpisodeSummary{},
 		&model.MerchantAgentJob{},
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := migrateCompatibility(db); err != nil {
-		return nil, err
-	}
-
-	log.Println("Database migration completed successfully.")
-	return db, nil
 }
 
 func migrateCompatibility(db *gorm.DB) error {

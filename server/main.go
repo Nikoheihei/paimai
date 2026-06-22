@@ -31,11 +31,11 @@ func main() {
 	session.Configure(time.Duration(cfg.SessionIdleTTLSec) * time.Second)
 
 	// 2. 初始化数据库连接 (如果容器未启动，仅记录错误但不崩溃，便于非 Docker 环境编译运行)
-	database, err := db.InitDB(cfg.MySQLDSN)
+	database, err := db.InitRouter(cfg.MySQLWriteDSN, cfg.MySQLReadDSN)
 	if err != nil {
 		log.Printf("[警告] 无法连接到数据库: %v。请确保 MySQL 容器已启动并在运行中。", err)
 	} else {
-		log.Println("数据库初始化成功，表结构已自动迁移。")
+		log.Println("数据库读写路由初始化成功，表结构已在写库自动迁移。")
 		_ = database
 	}
 
@@ -117,7 +117,7 @@ func main() {
 	})
 
 	if database != nil {
-		adminStore := repository.NewGormAdminStore(database)
+		adminStore := repository.NewGormAdminStoreWithRouter(database.Read, database.Write)
 
 		// 启动 Outbox → Redis Stream 轮询器
 		if redisClients != nil && redisClients.Master != nil {
@@ -126,7 +126,7 @@ func main() {
 		}
 
 		// 认证服务（注册/登录无需鉴权，在全局中间件前注册）
-		authStore := repository.NewGormAuthStore(database)
+		authStore := repository.NewGormAuthStoreWithRouter(database.Read, database.Write)
 		authService := service.NewAuthService(authStore)
 		handler.RegisterAuthRoutes(r, authService)
 
@@ -136,9 +136,9 @@ func main() {
 		roomService := service.NewRoomService(adminStore, settleService)
 
 		// 用户端公开路由（无鉴权，在前端首页访问前注册）
-		publicStore := repository.NewGormPublicStore(database)
+		publicStore := repository.NewGormPublicStoreWithRouter(database.Read, database.Write)
 		publicService := service.NewPublicService(publicStore, adminStore, redisClients, streamPublisher, settleService)
-		agentStore := agentpkg.NewGormStore(database)
+		agentStore := agentpkg.NewGormStoreWithRouter(database.Read, database.Write)
 		agentService := agentpkg.NewService(agentStore, adminStore, publicService)
 		if redisClients != nil && redisClients.Master != nil {
 			agentService.SetSessionStore(agentpkg.NewRedisSessionStore(redisClients.Master))
@@ -173,7 +173,8 @@ func main() {
 
 		handler.RegisterUploadRoutes(r)
 		handler.RegisterAuthMeRoute(r, authService)
-		handler.RegisterAddressRoutes(r.Group("/api"), database)
+		addressStore := repository.NewGormAddressStoreWithRouter(database.Read, database.Write)
+		handler.RegisterAddressRoutes(r.Group("/api"), addressStore)
 
 		// 启动时结算已过期的 running 竞拍
 		if count, err := adminService.StartDueScheduledAuctions(context.Background()); err == nil && count > 0 {

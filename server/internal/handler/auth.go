@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"paimai/internal/model"
+	"paimai/internal/repository"
 	"paimai/internal/service"
 	"paimai/internal/session"
 	"paimai/pkg/response"
@@ -47,8 +48,8 @@ func (h *AuthHandler) logout(c *gin.Context) {
 }
 
 // RegisterAddressRoutes 注册收货地址路由（挂在鉴权中间件之后）。
-func RegisterAddressRoutes(r gin.IRouter, database *gorm.DB) {
-	h := &AddressHandler{db: database}
+func RegisterAddressRoutes(r gin.IRouter, store repository.AddressStore) {
+	h := &AddressHandler{store: store}
 	r.GET("/addresses", h.listAddresses)
 	r.POST("/addresses", h.createAddress)
 	r.PUT("/addresses/:id", h.updateAddress)
@@ -56,7 +57,7 @@ func RegisterAddressRoutes(r gin.IRouter, database *gorm.DB) {
 }
 
 type AddressHandler struct {
-	db *gorm.DB
+	store repository.AddressStore
 }
 
 func (h *AddressHandler) listAddresses(c *gin.Context) {
@@ -65,11 +66,8 @@ func (h *AddressHandler) listAddresses(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, 401, "unauthorized")
 		return
 	}
-	var result []model.Address
-	if err := h.db.WithContext(c.Request.Context()).
-		Where("user_id = ?", userID).
-		Order("is_default DESC, id DESC").
-		Find(&result).Error; err != nil {
+	result, err := h.store.ListAddresses(c.Request.Context(), userID)
+	if err != nil {
 		response.Error(c, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
@@ -93,15 +91,7 @@ func (h *AddressHandler) createAddress(c *gin.Context) {
 		return
 	}
 
-	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if input.IsDefault {
-			if err := tx.Model(&model.Address{}).Where("user_id = ?", userID).Update("is_default", false).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Create(&input).Error
-	})
-	if err != nil {
+	if err := h.store.CreateAddress(c.Request.Context(), &input); err != nil {
 		response.Error(c, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
@@ -128,25 +118,7 @@ func (h *AddressHandler) updateAddress(c *gin.Context) {
 		return
 	}
 
-	var updated model.Address
-	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ? AND user_id = ?", id, userID).First(&updated).Error; err != nil {
-			return err
-		}
-		updated.Name = input.Name
-		updated.Phone = input.Phone
-		updated.Province = input.Province
-		updated.City = input.City
-		updated.District = input.District
-		updated.Detail = input.Detail
-		updated.IsDefault = input.IsDefault
-		if input.IsDefault {
-			if err := tx.Model(&model.Address{}).Where("user_id = ? AND id <> ?", userID, id).Update("is_default", false).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Save(&updated).Error
-	})
+	updated, err := h.store.UpdateAddress(c.Request.Context(), userID, id, input)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		response.Error(c, http.StatusNotFound, 404, "address not found")
 		return
@@ -168,9 +140,7 @@ func (h *AddressHandler) deleteAddress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.db.WithContext(c.Request.Context()).
-		Where("id = ? AND user_id = ?", id, userID).
-		Delete(&model.Address{}).Error; err != nil {
+	if err := h.store.DeleteAddress(c.Request.Context(), userID, id); err != nil {
 		response.Error(c, http.StatusInternalServerError, 500, err.Error())
 		return
 	}

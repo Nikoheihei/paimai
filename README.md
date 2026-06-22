@@ -137,6 +137,8 @@ Services started:
 # Backend
 cd server
 export MYSQL_DSN="root:rootpassword@tcp(localhost:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"
+export MYSQL_WRITE_DSN="$MYSQL_DSN"
+export MYSQL_READ_DSN="$MYSQL_DSN"
 export REDIS_MASTER_ADDR="localhost:6379"
 export AGENT_LLM_API_KEY="sk-your-key"
 go run main.go
@@ -212,7 +214,9 @@ Environment variables (set in `.env` or `docker-compose.yml`):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MYSQL_DSN` | Yes | - | MySQL connection string |
+| `MYSQL_DSN` | Yes | - | Legacy MySQL DSN; used as fallback for both read and write |
+| `MYSQL_WRITE_DSN` | No | `MYSQL_DSN` | Strong-consistency MySQL writer for commands, transactions, migrations, bidding, settlement, payment, Pact approval |
+| `MYSQL_READ_DSN` | No | `MYSQL_WRITE_DSN` | Eventually consistent MySQL reader for initial snapshots, list pages, audit playback, and non-realtime reads |
 | `REDIS_MASTER_ADDR` | Yes | - | Redis master address (`host:port`) |
 | `REDIS_SLAVE_ADDR` | No | Same as master | Redis slave address |
 | `AGENT_LLM_API_KEY` | Yes* | - | DeepSeek V4 Pro API key (*required for Agent features) |
@@ -220,6 +224,12 @@ Environment variables (set in `.env` or `docker-compose.yml`):
 | `SERVER_PORT` | No | `8080` | HTTP listen port |
 | `AGENT_RUNNER_ENABLED` | No | `true` | Enable auto-bid runner |
 | `AGENT_RUNNER_INTERVAL_MS` | No | `2000` | Runner scan interval (ms) |
+
+Read/write separation boundary:
+
+- MySQL read DB serves initial HTTP snapshots only: room lists, room detail, product detail, ordinary order lists, agent lists, and audit playback.
+- Realtime auction state still flows through MySQL writer transactions → outbox → Redis Stream → WebSocket.
+- Post-write strong-consistency reads stay on the MySQL writer to avoid replica-lag mistakes.
 
 ---
 

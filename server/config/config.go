@@ -9,6 +9,8 @@ import (
 type Config struct {
 	ServerPort               string
 	MySQLDSN                 string
+	MySQLWriteDSN            string
+	MySQLReadDSN             string
 	RedisMasterAddr          string
 	RedisSlaveAddr           string
 	AllowAllWebSocketOrigins bool
@@ -23,9 +25,14 @@ type Config struct {
 
 // LoadConfig 从环境变量加载配置，如果不存在则返回默认配置。
 func LoadConfig() *Config {
+	legacyMySQLDSN := getEnv("MYSQL_DSN", "root:rootpassword@tcp(localhost:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local")
+	writeDSN := getEnv("MYSQL_WRITE_DSN", legacyMySQLDSN)
+	readDSN := getEnv("MYSQL_READ_DSN", writeDSN)
 	return &Config{
 		ServerPort:               getEnv("SERVER_PORT", "8080"),
-		MySQLDSN:                 getEnv("MYSQL_DSN", "root:rootpassword@tcp(localhost:3306)/paimai?charset=utf8mb4&parseTime=True&loc=Local"),
+		MySQLDSN:                 legacyMySQLDSN,
+		MySQLWriteDSN:            writeDSN,
+		MySQLReadDSN:             readDSN,
 		RedisMasterAddr:          getEnv("REDIS_MASTER_ADDR", "localhost:6379"),
 		RedisSlaveAddr:           getEnv("REDIS_SLAVE_ADDR", "localhost:6380"),
 		AllowAllWebSocketOrigins: getEnv("ALLOW_ALL_WS_ORIGINS", "true") == "true",
