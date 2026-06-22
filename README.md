@@ -65,6 +65,8 @@
 
 See [Performance Test Results](docs/performance-test-results.md) for single-auction hotspot tests, multi-room capacity tests, WebSocket stability checks, controlled bottleneck experiments, and the final bottleneck analysis.
 
+See [Bottleneck Evolution](docs/bottleneck-evolution.md) for the concise optimization timeline, including error-code correction, Redis pre-filtering, Outbox acceleration, and WebSocket broadcast lock reduction.
+
 ---
 
 ## System Architecture
@@ -457,6 +459,8 @@ This project is licensed under the MIT License.
 ## 压测结果
 
 详细压测数据见 [压测结果](docs/performance-test-results.md)，包含单拍卖热点、多房间容量、WebSocket 长连接、控制变量实验和系统瓶颈定位。
+
+精简后的优化过程见 [压测瓶颈演进](docs/bottleneck-evolution.md)，包含错误码修正、Redis 预过滤、Outbox 加速和 WebSocket 广播锁优化。
 
 ## 快速开始
 
